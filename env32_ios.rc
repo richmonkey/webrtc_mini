@@ -1,0 +1,5 @@
+export GYP_CROSSCOMPILE=1
+export GYP_DEFINES="OS=ios target_arch=arm chromium_ios_signing=0"
+export GYP_GENERATOR_FLAGS="output_dir=out_ios32"
+export GYP_GENERATORS=ninja
+

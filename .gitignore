@@ -29,6 +29,7 @@
 .cproject
 .gdb_history
 .gdbinit
+.landmines
 .metadata
 .project
 .pydevproject
@@ -135,7 +136,6 @@
 /third_party/zlib
 /tools/android
 /tools/clang
-/tools/find_depot_tools.py
 /tools/generate_library_loader
 /tools/gn
 /tools/grit
