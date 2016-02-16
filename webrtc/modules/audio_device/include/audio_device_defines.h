@@ -154,12 +154,21 @@ class AudioParameters {
         channels_(channels),
         frames_per_buffer_(frames_per_buffer),
         frames_per_10ms_buffer_(static_cast<size_t>(sample_rate / 100)) {}
-  void reset(int sample_rate, int channels, int frames_per_buffer) {
+
+  void reset(int sample_rate, size_t channels, size_t frames_per_buffer) {
     sample_rate_ = sample_rate;
     channels_ = channels;
     frames_per_buffer_ = frames_per_buffer;
     frames_per_10ms_buffer_ = static_cast<size_t>(sample_rate / 100);
   }
+  void reset(int sample_rate, size_t channels, double ms_per_buffer) {
+    reset(sample_rate, channels,
+          static_cast<size_t>(sample_rate * ms_per_buffer + 0.5));
+  }
+  void reset(int sample_rate, size_t channels) {
+    reset(sample_rate, channels, static_cast<size_t>(0));
+  }
+
   int bits_per_sample() const { return kBitsPerSample; }
   int sample_rate() const { return sample_rate_; }
   int channels() const { return channels_; }
@@ -172,6 +181,7 @@ class AudioParameters {
   int GetBytesPerBuffer() const {
     return frames_per_buffer_ * GetBytesPerFrame();
   }
+  bool is_complete() const { return (is_valid() && (frames_per_buffer_ > 0)); }
   size_t GetBytesPer10msBuffer() const {
     return frames_per_10ms_buffer_ * GetBytesPerFrame();
   }

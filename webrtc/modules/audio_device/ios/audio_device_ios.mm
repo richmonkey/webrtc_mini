@@ -23,7 +23,7 @@
 #include "webrtc/base/logging.h"
 #include "webrtc/base/thread_annotations.h"
 #include "webrtc/modules/audio_device/ios/fine_audio_buffer.h"
-#include "webrtc/modules/utility/include/helpers_ios.h"
+#include "webrtc/modules/utility/interface/helpers_ios.h"
 
 namespace webrtc {
 
