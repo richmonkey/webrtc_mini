@@ -31,6 +31,13 @@
         '<(webrtc_vp9_dir)/vp9.gyp:*',
         'webrtc/webrtc.gyp:webrtc',
       ],
+      'conditions': [
+        ['include_examples==1', {
+          'dependencies': [
+            'webrtc/examples/android/voip_jni/voip.gyp:*',
+          ],
+        }],
+      ],
     },
   ],
 }

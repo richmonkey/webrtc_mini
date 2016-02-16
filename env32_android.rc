@@ -1,0 +1,5 @@
+export GYP_CROSSCOMPILE=1
+#armv7  https://groups.google.com/forum/#!topic/discuss-webrtc/QUDSEsoiSMw
+export GYP_DEFINES="OS=android"
+export GYP_GENERATOR_FLAGS="output_dir=out_android32"
+export GYP_GENERATORS=ninja

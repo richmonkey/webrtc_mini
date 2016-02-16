@@ -81,7 +81,7 @@
     'enable_data_logging%': 0,
 
     # Enables the use of protocol buffers for debug recordings.
-    'enable_protobuf%': 1,
+    'enable_protobuf%': 0,
 
     # Disable these to not build components which can be externally provided.
     'build_expat%': 1,

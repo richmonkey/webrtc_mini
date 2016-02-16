@@ -154,6 +154,14 @@ class AudioParameters {
         channels_(channels),
         frames_per_buffer_(frames_per_buffer),
         frames_per_10ms_buffer_(static_cast<size_t>(sample_rate / 100)) {}
+#ifdef ANDROID
+  void reset(int sample_rate, int channels, int frames_per_buffer) {
+    sample_rate_ = sample_rate;
+    channels_ = channels;
+    frames_per_buffer_ = frames_per_buffer;
+    frames_per_10ms_buffer_ = static_cast<size_t>(sample_rate / 100);
+  }
+#endif
 
   void reset(int sample_rate, size_t channels, size_t frames_per_buffer) {
     sample_rate_ = sample_rate;
