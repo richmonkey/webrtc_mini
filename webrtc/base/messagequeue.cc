@@ -27,7 +27,7 @@ typedef rtc::PhysicalSocketServer DefaultSocketServer;
 
 namespace rtc {
 
-const uint32 kMaxMsgLatency = 150;  // 150 ms
+const uint32_t kMaxMsgLatency = 150;  // 150 ms
 
 //------------------------------------------------------------------
 // MessageQueueManager
@@ -116,9 +116,9 @@ void MessageQueueManager::ClearInternal(MessageHandler *handler) {
 //------------------------------------------------------------------
 // MessageQueue
 
-MessageQueue::MessageQueue(SocketServer* ss)
+MessageQueue::MessageQueue(SocketServer* ss, bool init_queue)
     : ss_(ss), fStop_(false), fPeekKeep_(false),
-      dmsgq_next_num_(0) {
+      dmsgq_next_num_(0), fInitialized_(false), fDestroyed_(false) {
   if (!ss_) {
     // Currently, MessageQueue holds a socket server, and is the base class for
     // Thread.  It seems like it makes more sense for Thread to hold the socket
@@ -129,10 +129,30 @@ MessageQueue::MessageQueue(SocketServer* ss)
     ss_ = default_ss_.get();
   }
   ss_->SetMessageQueue(this);
-  MessageQueueManager::Add(this);
+  if (init_queue) {
+    DoInit();
+  }
 }
 
 MessageQueue::~MessageQueue() {
+  DoDestroy();
+}
+
+void MessageQueue::DoInit() {
+  if (fInitialized_) {
+    return;
+  }
+
+  fInitialized_ = true;
+  MessageQueueManager::Add(this);
+}
+
+void MessageQueue::DoDestroy() {
+  if (fDestroyed_) {
+    return;
+  }
+
+  fDestroyed_ = true;
   // The signal is done from here to ensure
   // that it always gets called when the queue
   // is going away.
@@ -188,8 +208,8 @@ bool MessageQueue::Get(Message *pmsg, int cmsWait, bool process_io) {
 
   int cmsTotal = cmsWait;
   int cmsElapsed = 0;
-  uint32 msStart = Time();
-  uint32 msCurrent = msStart;
+  uint32_t msStart = Time();
+  uint32_t msCurrent = msStart;
   while (true) {
     // Check for sent messages
     ReceiveSends();
@@ -227,7 +247,7 @@ bool MessageQueue::Get(Message *pmsg, int cmsWait, bool process_io) {
 
       // Log a warning for time-sensitive messages that we're late to deliver.
       if (pmsg->ts_sensitive) {
-        int32 delay = TimeDiff(msCurrent, pmsg->ts_sensitive);
+        int32_t delay = TimeDiff(msCurrent, pmsg->ts_sensitive);
         if (delay > 0) {
           LOG_F(LS_WARNING) << "id: " << pmsg->message_id << "  delay: "
                             << (delay + kMaxMsgLatency) << "ms";
@@ -276,8 +296,10 @@ bool MessageQueue::Get(Message *pmsg, int cmsWait, bool process_io) {
 void MessageQueue::ReceiveSends() {
 }
 
-void MessageQueue::Post(MessageHandler *phandler, uint32 id,
-    MessageData *pdata, bool time_sensitive) {
+void MessageQueue::Post(MessageHandler* phandler,
+                        uint32_t id,
+                        MessageData* pdata,
+                        bool time_sensitive) {
   if (fStop_)
     return;
 
@@ -299,20 +321,23 @@ void MessageQueue::Post(MessageHandler *phandler, uint32 id,
 
 void MessageQueue::PostDelayed(int cmsDelay,
                                MessageHandler* phandler,
-                               uint32 id,
+                               uint32_t id,
                                MessageData* pdata) {
   return DoDelayPost(cmsDelay, TimeAfter(cmsDelay), phandler, id, pdata);
 }
 
-void MessageQueue::PostAt(uint32 tstamp,
+void MessageQueue::PostAt(uint32_t tstamp,
                           MessageHandler* phandler,
-                          uint32 id,
+                          uint32_t id,
                           MessageData* pdata) {
   return DoDelayPost(TimeUntil(tstamp), tstamp, phandler, id, pdata);
 }
 
-void MessageQueue::DoDelayPost(int cmsDelay, uint32 tstamp,
-    MessageHandler *phandler, uint32 id, MessageData* pdata) {
+void MessageQueue::DoDelayPost(int cmsDelay,
+                               uint32_t tstamp,
+                               MessageHandler* phandler,
+                               uint32_t id,
+                               MessageData* pdata) {
   if (fStop_)
     return;
 
@@ -350,7 +375,8 @@ int MessageQueue::GetDelay() {
   return kForever;
 }
 
-void MessageQueue::Clear(MessageHandler *phandler, uint32 id,
+void MessageQueue::Clear(MessageHandler* phandler,
+                         uint32_t id,
                          MessageList* removed) {
   CritScope cs(&crit_);
 

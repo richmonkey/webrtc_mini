@@ -15,10 +15,11 @@
 
 #include <algorithm>  // max, min
 
+#include "webrtc/base/safe_conversions.h"
 #include "webrtc/common_audio/signal_processing/include/signal_processing_library.h"
 #include "webrtc/modules/audio_coding/neteq/delay_peak_detector.h"
-#include "webrtc/modules/interface/module_common_types.h"
-#include "webrtc/system_wrappers/interface/logging.h"
+#include "webrtc/modules/include/module_common_types.h"
+#include "webrtc/system_wrappers/include/logging.h"
 
 namespace webrtc {
 
@@ -93,10 +94,11 @@ int DelayManager::Update(uint16_t sequence_number,
     packet_len_ms = packet_len_ms_;
   } else {
     // Calculate timestamps per packet and derive packet length in ms.
-    int packet_len_samp =
+    int64_t packet_len_samp =
         static_cast<uint32_t>(timestamp - last_timestamp_) /
         static_cast<uint16_t>(sequence_number - last_seq_no_);
-    packet_len_ms = (1000 * packet_len_samp) / sample_rate_hz;
+    packet_len_ms =
+        rtc::checked_cast<int>(1000 * packet_len_samp / sample_rate_hz);
   }
 
   if (packet_len_ms > 0) {
@@ -373,11 +375,11 @@ int DelayManager::TargetLevel() const {
 }
 
 void DelayManager::LastDecoderType(NetEqDecoder decoder_type) {
-  if (decoder_type == kDecoderAVT ||
-      decoder_type == kDecoderCNGnb ||
-      decoder_type == kDecoderCNGwb ||
-      decoder_type == kDecoderCNGswb32kHz ||
-      decoder_type == kDecoderCNGswb48kHz) {
+  if (decoder_type == NetEqDecoder::kDecoderAVT ||
+      decoder_type == NetEqDecoder::kDecoderCNGnb ||
+      decoder_type == NetEqDecoder::kDecoderCNGwb ||
+      decoder_type == NetEqDecoder::kDecoderCNGswb32kHz ||
+      decoder_type == NetEqDecoder::kDecoderCNGswb48kHz) {
     last_pack_cng_or_dtmf_ = 1;
   } else if (last_pack_cng_or_dtmf_ != 0) {
     last_pack_cng_or_dtmf_ = -1;

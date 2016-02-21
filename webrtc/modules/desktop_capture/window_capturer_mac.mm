@@ -22,8 +22,8 @@
 #include "webrtc/modules/desktop_capture/mac/desktop_configuration.h"
 #include "webrtc/modules/desktop_capture/mac/full_screen_chrome_window_detector.h"
 #include "webrtc/modules/desktop_capture/mac/window_list_utils.h"
-#include "webrtc/system_wrappers/interface/logging.h"
-#include "webrtc/system_wrappers/interface/tick_util.h"
+#include "webrtc/system_wrappers/include/logging.h"
+#include "webrtc/system_wrappers/include/tick_util.h"
 
 namespace webrtc {
 
@@ -66,7 +66,7 @@ class WindowCapturerMac : public WindowCapturer {
   rtc::scoped_refptr<FullScreenChromeWindowDetector>
       full_screen_chrome_window_detector_;
 
-  DISALLOW_COPY_AND_ASSIGN(WindowCapturerMac);
+  RTC_DISALLOW_COPY_AND_ASSIGN(WindowCapturerMac);
 };
 
 WindowCapturerMac::WindowCapturerMac(rtc::scoped_refptr<
@@ -82,11 +82,12 @@ WindowCapturerMac::~WindowCapturerMac() {
 bool WindowCapturerMac::GetWindowList(WindowList* windows) {
   // Only get on screen, non-desktop windows.
   CFArrayRef window_array = CGWindowListCopyWindowInfo(
-      kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements,
+      kCGWindowListExcludeDesktopElements,
       kCGNullWindowID);
   if (!window_array)
     return false;
-
+  MacDesktopConfiguration desktop_config = MacDesktopConfiguration::GetCurrent(
+      MacDesktopConfiguration::TopLeftOrigin);
   // Check windows to make sure they have an id, title, and use window layer
   // other than 0.
   CFIndex count = CFArrayGetCount(window_array);
@@ -108,6 +109,11 @@ bool WindowCapturerMac::GetWindowList(WindowList* windows) {
 
       int id;
       CFNumberGetValue(window_id, kCFNumberIntType, &id);
+
+      // Skip windows that are minimized and not full screen.
+      if (IsWindowMinimized(id) &&
+          !IsWindowFullScreen(desktop_config, window)) { continue;}
+
       WindowCapturer::Window window;
       window.id = id;
       if (!rtc::ToUtf8(window_title, &(window.title)) ||

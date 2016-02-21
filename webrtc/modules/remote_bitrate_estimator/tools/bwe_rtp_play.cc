@@ -14,8 +14,8 @@
 #include "webrtc/base/scoped_ptr.h"
 #include "webrtc/modules/remote_bitrate_estimator/include/remote_bitrate_estimator.h"
 #include "webrtc/modules/remote_bitrate_estimator/tools/bwe_rtp.h"
-#include "webrtc/modules/rtp_rtcp/interface/rtp_header_parser.h"
-#include "webrtc/modules/rtp_rtcp/interface/rtp_payload_registry.h"
+#include "webrtc/modules/rtp_rtcp/include/rtp_header_parser.h"
+#include "webrtc/modules/rtp_rtcp/include/rtp_payload_registry.h"
 #include "webrtc/test/rtp_file_reader.h"
 
 class Observer : public webrtc::RemoteBitrateObserver {
@@ -24,8 +24,8 @@ class Observer : public webrtc::RemoteBitrateObserver {
 
   // Called when a receive channel group has a new bitrate estimate for the
   // incoming streams.
-  virtual void OnReceiveBitrateChanged(const std::vector<unsigned int>& ssrcs,
-                                       unsigned int bitrate) {
+  virtual void OnReceiveBitrateChanged(const std::vector<uint32_t>& ssrcs,
+                                       uint32_t bitrate) {
     printf("[%u] Num SSRCs: %d, bitrate: %u\n",
            static_cast<uint32_t>(clock_->TimeInMilliseconds()),
            static_cast<int>(ssrcs.size()), bitrate);

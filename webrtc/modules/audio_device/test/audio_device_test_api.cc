@@ -19,7 +19,7 @@
 
 #include "webrtc/modules/audio_device/audio_device_config.h"
 #include "webrtc/modules/audio_device/audio_device_impl.h"
-#include "webrtc/system_wrappers/interface/sleep.h"
+#include "webrtc/system_wrappers/include/sleep.h"
 
 // Helper functions
 #if defined(ANDROID)
@@ -85,7 +85,7 @@ class AudioTransportAPI: public AudioTransport {
   int32_t RecordedDataIsAvailable(const void* audioSamples,
                                   const size_t nSamples,
                                   const size_t nBytesPerSample,
-                                  const uint8_t nChannels,
+                                  const size_t nChannels,
                                   const uint32_t sampleRate,
                                   const uint32_t totalDelay,
                                   const int32_t clockSkew,
@@ -110,7 +110,7 @@ class AudioTransportAPI: public AudioTransport {
 
   int32_t NeedMorePlayData(const size_t nSamples,
                            const size_t nBytesPerSample,
-                           const uint8_t nChannels,
+                           const size_t nChannels,
                            const uint32_t sampleRate,
                            void* audioSamples,
                            size_t& nSamplesOut,
@@ -128,29 +128,6 @@ class AudioTransportAPI: public AudioTransport {
     return 0;
   }
 
-  int OnDataAvailable(const int voe_channels[],
-                      int number_of_voe_channels,
-                      const int16_t* audio_data,
-                      int sample_rate,
-                      int number_of_channels,
-                      size_t number_of_frames,
-                      int audio_delay_milliseconds,
-                      int current_volume,
-                      bool key_pressed,
-                      bool need_audio_processing) override {
-    return 0;
-  }
-
-  void PushCaptureData(int voe_channel, const void* audio_data,
-                       int bits_per_sample, int sample_rate,
-                       int number_of_channels,
-                       size_t number_of_frames) override {}
-
-  void PullRenderData(int bits_per_sample, int sample_rate,
-                      int number_of_channels, size_t number_of_frames,
-                      void* audio_data,
-                      int64_t* elapsed_time_ms,
-                      int64_t* ntp_time_ms) override {}
  private:
   uint32_t rec_count_;
   uint32_t play_count_;
@@ -163,7 +140,7 @@ class AudioDeviceAPITest: public testing::Test {
   virtual ~AudioDeviceAPITest() {}
 
   static void SetUpTestCase() {
-    process_thread_ = ProcessThread::Create();
+    process_thread_ = ProcessThread::Create("ProcessThread");
     process_thread_->Start();
 
     // Windows:
@@ -938,7 +915,7 @@ TEST_F(AudioDeviceAPITest, SpeakerVolumeTests) {
     EXPECT_EQ(0, audio_device_->MaxSpeakerVolume(&maxVolume));
     EXPECT_EQ(0, audio_device_->MinSpeakerVolume(&minVolume));
     EXPECT_EQ(0, audio_device_->SpeakerVolumeStepSize(&stepSize));
-    for (vol = minVolume; vol < (int)maxVolume; vol += 20*stepSize) {
+    for (vol = minVolume; vol < (unsigned int)maxVolume; vol += 20*stepSize) {
       EXPECT_EQ(0, audio_device_->SetSpeakerVolume(vol));
       EXPECT_EQ(0, audio_device_->SpeakerVolume(&volume));
       CheckVolume(volume, vol);
@@ -1040,9 +1017,15 @@ TEST_F(AudioDeviceAPITest, MicrophoneVolumeIsAvailable) {
 // MicrophoneVolume
 // MaxMicrophoneVolume
 // MinMicrophoneVolume
-// NOTE: Disabled on mac due to issue 257.
-#ifndef WEBRTC_MAC
-TEST_F(AudioDeviceAPITest, MicrophoneVolumeTests) {
+
+// Disabled on Mac and Linux,
+// see https://bugs.chromium.org/p/webrtc/issues/detail?id=5414
+#if defined(WEBRTC_MAC) || defined(WEBRTC_LINUX)
+#define MAYBE_MicrophoneVolumeTests DISABLED_MicrophoneVolumeTests
+#else
+#define MAYBE_MicrophoneVolumeTests MicrophoneVolumeTests
+#endif
+TEST_F(AudioDeviceAPITest, MAYBE_MicrophoneVolumeTests) {
   uint32_t vol(0);
   uint32_t volume(0);
   uint32_t maxVolume(0);
@@ -1084,7 +1067,7 @@ TEST_F(AudioDeviceAPITest, MicrophoneVolumeTests) {
     EXPECT_EQ(0, audio_device_->MaxMicrophoneVolume(&maxVolume));
     EXPECT_EQ(0, audio_device_->MinMicrophoneVolume(&minVolume));
     EXPECT_EQ(0, audio_device_->MicrophoneVolumeStepSize(&stepSize));
-    for (vol = minVolume; vol < (int)maxVolume; vol += 10*stepSize)
+    for (vol = minVolume; vol < (unsigned int)maxVolume; vol += 10*stepSize)
     {
       EXPECT_EQ(0, audio_device_->SetMicrophoneVolume(vol));
       EXPECT_EQ(0, audio_device_->MicrophoneVolume(&volume));
@@ -1135,7 +1118,6 @@ TEST_F(AudioDeviceAPITest, MicrophoneVolumeTests) {
     EXPECT_EQ(0, audio_device_->SetMicrophoneVolume(maxVolume/10));
   }
 }
-#endif  // !WEBRTC_MAC
 
 TEST_F(AudioDeviceAPITest, SpeakerMuteIsAvailable) {
   bool available;

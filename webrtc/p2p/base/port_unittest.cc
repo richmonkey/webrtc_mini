@@ -17,6 +17,7 @@
 #include "webrtc/p2p/base/testturnserver.h"
 #include "webrtc/p2p/base/transport.h"
 #include "webrtc/p2p/base/turnport.h"
+#include "webrtc/base/arraysize.h"
 #include "webrtc/base/crc32.h"
 #include "webrtc/base/gunit.h"
 #include "webrtc/base/helpers.h"
@@ -57,13 +58,15 @@ static const SocketAddress kRelayTcpExtAddr("99.99.99.3", 5003);
 static const SocketAddress kRelaySslTcpIntAddr("99.99.99.2", 5004);
 static const SocketAddress kRelaySslTcpExtAddr("99.99.99.3", 5005);
 static const SocketAddress kTurnUdpIntAddr("99.99.99.4", STUN_SERVER_PORT);
+static const SocketAddress kTurnTcpIntAddr("99.99.99.4", 5010);
 static const SocketAddress kTurnUdpExtAddr("99.99.99.5", 0);
 static const RelayCredentials kRelayCredentials("test", "test");
 
 // TODO: Update these when RFC5245 is completely supported.
 // Magic value of 30 is from RFC3484, for IPv4 addresses.
-static const uint32 kDefaultPrflxPriority = ICE_TYPE_PREFERENCE_PRFLX << 24 |
-             30 << 8 | (256 - ICE_CANDIDATE_COMPONENT_DEFAULT);
+static const uint32_t kDefaultPrflxPriority =
+    ICE_TYPE_PREFERENCE_PRFLX << 24 | 30 << 8 |
+    (256 - ICE_CANDIDATE_COMPONENT_DEFAULT);
 
 static const int kTiebreaker1 = 11111;
 static const int kTiebreaker2 = 22222;
@@ -100,13 +103,19 @@ class TestPort : public Port {
            rtc::PacketSocketFactory* factory,
            rtc::Network* network,
            const rtc::IPAddress& ip,
-           uint16 min_port,
-           uint16 max_port,
+           uint16_t min_port,
+           uint16_t max_port,
            const std::string& username_fragment,
            const std::string& password)
-      : Port(thread, type, factory, network, ip, min_port, max_port,
-             username_fragment, password) {
-  }
+      : Port(thread,
+             type,
+             factory,
+             network,
+             ip,
+             min_port,
+             max_port,
+             username_fragment,
+             password) {}
   ~TestPort() {}
 
   // Expose GetStunMessage so that we can test it.
@@ -131,6 +140,10 @@ class TestPort : public Port {
     rtc::SocketAddress addr(ip(), min_port());
     AddAddress(addr, addr, rtc::SocketAddress(), "udp", "", "", Type(),
                ICE_TYPE_PREFERENCE_HOST, 0, true);
+  }
+
+  virtual bool SupportsProtocol(const std::string& protocol) const {
+    return true;
   }
 
   // Exposed for testing candidate building.
@@ -192,9 +205,13 @@ class TestPort : public Port {
   }
 
  private:
+  void OnSentPacket(rtc::AsyncPacketSocket* socket,
+                    const rtc::SentPacket& sent_packet) {
+    PortInterface::SignalSentPacket(sent_packet);
+  }
   rtc::scoped_ptr<ByteBuffer> last_stun_buf_;
   rtc::scoped_ptr<IceMessage> last_stun_msg_;
-  int type_preference_;
+  int type_preference_ = 0;
 };
 
 class TestChannel : public sigslot::has_slots<> {
@@ -249,9 +266,7 @@ class TestChannel : public sigslot::has_slots<> {
   void Ping() {
     Ping(0);
   }
-  void Ping(uint32 now) {
-    conn_->Ping(now);
-  }
+  void Ping(uint32_t now) { conn_->Ping(now); }
   void Stop() {
     if (conn_) {
       conn_->Destroy();
@@ -451,9 +466,8 @@ class PortTest : public testing::Test, public sigslot::has_slots<> {
   }
   UDPPort* CreateUdpPort(const SocketAddress& addr,
                          PacketSocketFactory* socket_factory) {
-    return UDPPort::Create(main_, socket_factory, &network_,
-                           addr.ipaddr(), 0, 0, username_, password_,
-                           std::string(), false);
+    return UDPPort::Create(main_, socket_factory, &network_, addr.ipaddr(), 0,
+                           0, username_, password_, std::string(), true);
   }
   TCPPort* CreateTcpPort(const SocketAddress& addr) {
     return CreateTcpPort(addr, &socket_factory_);
@@ -484,19 +498,19 @@ class PortTest : public testing::Test, public sigslot::has_slots<> {
   TurnPort* CreateTurnPort(const SocketAddress& addr,
                            PacketSocketFactory* socket_factory,
                            ProtocolType int_proto, ProtocolType ext_proto) {
-    return CreateTurnPort(addr, socket_factory,
-                          int_proto, ext_proto, kTurnUdpIntAddr);
+    SocketAddress server_addr =
+        int_proto == PROTO_TCP ? kTurnTcpIntAddr : kTurnUdpIntAddr;
+    return CreateTurnPort(addr, socket_factory, int_proto, ext_proto,
+                          server_addr);
   }
   TurnPort* CreateTurnPort(const SocketAddress& addr,
                            PacketSocketFactory* socket_factory,
                            ProtocolType int_proto, ProtocolType ext_proto,
                            const rtc::SocketAddress& server_addr) {
-    return TurnPort::Create(main_, socket_factory, &network_,
-                            addr.ipaddr(), 0, 0,
-                            username_, password_, ProtocolAddress(
-                                server_addr, PROTO_UDP),
-                            kRelayCredentials, 0,
-                            std::string());
+    return TurnPort::Create(main_, socket_factory, &network_, addr.ipaddr(), 0,
+                            0, username_, password_,
+                            ProtocolAddress(server_addr, int_proto),
+                            kRelayCredentials, 0, std::string());
   }
   RelayPort* CreateGturnPort(const SocketAddress& addr,
                              ProtocolType int_proto, ProtocolType ext_proto) {
@@ -821,7 +835,7 @@ void PortTest::TestConnectivity(const char* name1, Port* port1,
 
     if (same_addr1 && same_addr2) {
       // The new ping got back to the source.
-      EXPECT_EQ(Connection::STATE_READABLE, ch1.conn()->read_state());
+      EXPECT_TRUE(ch1.conn()->receiving());
       EXPECT_EQ(Connection::STATE_WRITABLE, ch2.conn()->write_state());
 
       // First connection may not be writable if the first ping did not get
@@ -841,7 +855,7 @@ void PortTest::TestConnectivity(const char* name1, Port* port1,
       // able to get a ping from it. This gives us the real source address.
       ch1.Ping();
       EXPECT_TRUE_WAIT(!ch2.remote_address().IsNil(), kTimeout);
-      EXPECT_EQ(Connection::STATE_READ_INIT, ch2.conn()->read_state());
+      EXPECT_FALSE(ch2.conn()->receiving());
       EXPECT_TRUE(ch1.remote_address().IsNil());
 
       // Pick up the actual address and establish the connection.
@@ -854,7 +868,7 @@ void PortTest::TestConnectivity(const char* name1, Port* port1,
       // The new ping came in, but from an unexpected address. This will happen
       // when the destination NAT is symmetric.
       EXPECT_FALSE(ch1.remote_address().IsNil());
-      EXPECT_EQ(Connection::STATE_READ_INIT, ch1.conn()->read_state());
+      EXPECT_FALSE(ch1.conn()->receiving());
 
       // Update our address and complete the connection.
       ch1.AcceptConnection(GetCandidate(port2));
@@ -876,14 +890,14 @@ void PortTest::TestConnectivity(const char* name1, Port* port1,
   ASSERT_TRUE(ch1.conn() != NULL);
   ASSERT_TRUE(ch2.conn() != NULL);
   if (possible) {
-    EXPECT_EQ(Connection::STATE_READABLE, ch1.conn()->read_state());
+    EXPECT_TRUE(ch1.conn()->receiving());
     EXPECT_EQ(Connection::STATE_WRITABLE, ch1.conn()->write_state());
-    EXPECT_EQ(Connection::STATE_READABLE, ch2.conn()->read_state());
+    EXPECT_TRUE(ch2.conn()->receiving());
     EXPECT_EQ(Connection::STATE_WRITABLE, ch2.conn()->write_state());
   } else {
-    EXPECT_NE(Connection::STATE_READABLE, ch1.conn()->read_state());
+    EXPECT_FALSE(ch1.conn()->receiving());
     EXPECT_NE(Connection::STATE_WRITABLE, ch1.conn()->write_state());
-    EXPECT_NE(Connection::STATE_READABLE, ch2.conn()->read_state());
+    EXPECT_FALSE(ch2.conn()->receiving());
     EXPECT_NE(Connection::STATE_WRITABLE, ch2.conn()->write_state());
   }
 
@@ -904,8 +918,8 @@ class FakePacketSocketFactory : public rtc::PacketSocketFactory {
   ~FakePacketSocketFactory() override { }
 
   AsyncPacketSocket* CreateUdpSocket(const SocketAddress& address,
-                                     uint16 min_port,
-                                     uint16 max_port) override {
+                                     uint16_t min_port,
+                                     uint16_t max_port) override {
     EXPECT_TRUE(next_udp_socket_ != NULL);
     AsyncPacketSocket* result = next_udp_socket_;
     next_udp_socket_ = NULL;
@@ -913,8 +927,8 @@ class FakePacketSocketFactory : public rtc::PacketSocketFactory {
   }
 
   AsyncPacketSocket* CreateServerTcpSocket(const SocketAddress& local_address,
-                                           uint16 min_port,
-                                           uint16 max_port,
+                                           uint16_t min_port,
+                                           uint16_t max_port,
                                            int opts) override {
     EXPECT_TRUE(next_server_tcp_socket_ != NULL);
     AsyncPacketSocket* result = next_server_tcp_socket_;
@@ -1230,6 +1244,58 @@ TEST_F(PortTest, TestSslTcpToSslTcpRelay) {
 }
 */
 
+// Test that a connection will be dead and deleted if
+// i) it has never received anything for MIN_CONNECTION_LIFETIME milliseconds
+//    since it was created, or
+// ii) it has not received anything for DEAD_CONNECTION_RECEIVE_TIMEOUT
+//     milliseconds since last receiving.
+TEST_F(PortTest, TestConnectionDead) {
+  UDPPort* port1 = CreateUdpPort(kLocalAddr1);
+  UDPPort* port2 = CreateUdpPort(kLocalAddr2);
+  TestChannel ch1(port1);
+  TestChannel ch2(port2);
+  // Acquire address.
+  ch1.Start();
+  ch2.Start();
+  ASSERT_EQ_WAIT(1, ch1.complete_count(), kTimeout);
+  ASSERT_EQ_WAIT(1, ch2.complete_count(), kTimeout);
+
+  // Test case that the connection has never received anything.
+  uint32_t before_created = rtc::Time();
+  ch1.CreateConnection(GetCandidate(port2));
+  uint32_t after_created = rtc::Time();
+  Connection* conn = ch1.conn();
+  ASSERT(conn != nullptr);
+  // It is not dead if it is after MIN_CONNECTION_LIFETIME but not pruned.
+  conn->UpdateState(after_created + MIN_CONNECTION_LIFETIME + 1);
+  rtc::Thread::Current()->ProcessMessages(0);
+  EXPECT_TRUE(ch1.conn() != nullptr);
+  // It is not dead if it is before MIN_CONNECTION_LIFETIME and pruned.
+  conn->UpdateState(before_created + MIN_CONNECTION_LIFETIME - 1);
+  conn->Prune();
+  rtc::Thread::Current()->ProcessMessages(0);
+  EXPECT_TRUE(ch1.conn() != nullptr);
+  // It will be dead after MIN_CONNECTION_LIFETIME and pruned.
+  conn->UpdateState(after_created + MIN_CONNECTION_LIFETIME + 1);
+  EXPECT_TRUE_WAIT(ch1.conn() == nullptr, kTimeout);
+
+  // Test case that the connection has received something.
+  // Create a connection again and receive a ping.
+  ch1.CreateConnection(GetCandidate(port2));
+  conn = ch1.conn();
+  ASSERT(conn != nullptr);
+  uint32_t before_last_receiving = rtc::Time();
+  conn->ReceivedPing();
+  uint32_t after_last_receiving = rtc::Time();
+  // The connection will be dead after DEAD_CONNECTION_RECEIVE_TIMEOUT
+  conn->UpdateState(
+      before_last_receiving + DEAD_CONNECTION_RECEIVE_TIMEOUT - 1);
+  rtc::Thread::Current()->ProcessMessages(100);
+  EXPECT_TRUE(ch1.conn() != nullptr);
+  conn->UpdateState(after_last_receiving + DEAD_CONNECTION_RECEIVE_TIMEOUT + 1);
+  EXPECT_TRUE_WAIT(ch1.conn() == nullptr, kTimeout);
+}
+
 // This test case verifies standard ICE features in STUN messages. Currently it
 // verifies Message Integrity attribute in STUN messages and username in STUN
 // binding request will have colon (":") between remote and local username.
@@ -1273,7 +1339,7 @@ TEST_F(PortTest, TestLoopbackCal) {
   // response.
   lport->Reset();
   lport->AddCandidateAddress(kLocalAddr2);
-  // Creating a different connection as |conn| is in STATE_READABLE.
+  // Creating a different connection as |conn| is receiving.
   Connection* conn1 = lport->CreateConnection(lport->Candidates()[1],
                                               Port::ORIGIN_MESSAGE);
   conn1->Ping(0);
@@ -1967,13 +2033,13 @@ TEST_F(PortTest, TestHandleStunBindingIndication) {
                       rtc::PacketTime());
   ASSERT_TRUE_WAIT(lport->last_stun_msg() != NULL, 1000);
   EXPECT_EQ(STUN_BINDING_RESPONSE, lport->last_stun_msg()->type());
-  uint32 last_ping_received1 = lconn->last_ping_received();
+  uint32_t last_ping_received1 = lconn->last_ping_received();
 
   // Adding a delay of 100ms.
   rtc::Thread::Current()->ProcessMessages(100);
   // Pinging lconn using stun indication message.
   lconn->OnReadPacket(buf->Data(), buf->Length(), rtc::PacketTime());
-  uint32 last_ping_received2 = lconn->last_ping_received();
+  uint32_t last_ping_received2 = lconn->last_ping_received();
   EXPECT_GT(last_ping_received2, last_ping_received1);
 }
 
@@ -1993,15 +2059,15 @@ TEST_F(PortTest, TestComputeCandidatePriority) {
   port->AddCandidateAddress(SocketAddress("3ffe::1234:5678", 1234));
   // These should all be:
   // (90 << 24) | ([rfc3484 pref value] << 8) | (256 - 177)
-  uint32 expected_priority_v4 = 1509957199U;
-  uint32 expected_priority_v6 = 1509959759U;
-  uint32 expected_priority_ula = 1509962319U;
-  uint32 expected_priority_v4mapped = expected_priority_v4;
-  uint32 expected_priority_v4compat = 1509949775U;
-  uint32 expected_priority_6to4 = 1509954639U;
-  uint32 expected_priority_teredo = 1509952079U;
-  uint32 expected_priority_sitelocal = 1509949775U;
-  uint32 expected_priority_6bone = 1509949775U;
+  uint32_t expected_priority_v4 = 1509957199U;
+  uint32_t expected_priority_v6 = 1509959759U;
+  uint32_t expected_priority_ula = 1509962319U;
+  uint32_t expected_priority_v4mapped = expected_priority_v4;
+  uint32_t expected_priority_v4compat = 1509949775U;
+  uint32_t expected_priority_6to4 = 1509954639U;
+  uint32_t expected_priority_teredo = 1509952079U;
+  uint32_t expected_priority_sitelocal = 1509949775U;
+  uint32_t expected_priority_6bone = 1509949775U;
   ASSERT_EQ(expected_priority_v4, port->Candidates()[0].priority());
   ASSERT_EQ(expected_priority_v6, port->Candidates()[1].priority());
   ASSERT_EQ(expected_priority_ula, port->Candidates()[2].priority());
@@ -2097,6 +2163,17 @@ TEST_F(PortTest, TestCandidateFoundation) {
   ASSERT_EQ_WAIT(1U, turnport3->Candidates().size(), kTimeout);
   EXPECT_NE(turnport3->Candidates()[0].foundation(),
             turnport2->Candidates()[0].foundation());
+
+  // Start a TCP turn server, and check that two turn candidates have
+  // different foundations if their relay protocols are different.
+  TestTurnServer turn_server3(rtc::Thread::Current(), kTurnTcpIntAddr,
+                              kTurnUdpExtAddr, PROTO_TCP);
+  rtc::scoped_ptr<Port> turnport4(
+      CreateTurnPort(kLocalAddr1, nat_socket_factory1(), PROTO_TCP, PROTO_UDP));
+  turnport4->PrepareAddress();
+  ASSERT_EQ_WAIT(1U, turnport4->Candidates().size(), kTimeout);
+  EXPECT_NE(turnport2->Candidates()[0].foundation(),
+            turnport4->Candidates()[0].foundation());
 }
 
 // This test verifies the related addresses of different types of
@@ -2219,7 +2296,7 @@ TEST_F(PortTest, TestWritableState) {
 
   // Data should be unsendable until the connection is accepted.
   char data[] = "abcd";
-  int data_size = ARRAY_SIZE(data);
+  int data_size = arraysize(data);
   rtc::PacketOptions options;
   EXPECT_EQ(SOCKET_ERROR, ch1.conn()->Send(data, data_size, options));
 
@@ -2233,10 +2310,10 @@ TEST_F(PortTest, TestWritableState) {
   // Ask the connection to update state as if enough time has passed to lose
   // full writability and 5 pings went unresponded to. We'll accomplish the
   // latter by sending pings but not pumping messages.
-  for (uint32 i = 1; i <= CONNECTION_WRITE_CONNECT_FAILURES; ++i) {
+  for (uint32_t i = 1; i <= CONNECTION_WRITE_CONNECT_FAILURES; ++i) {
     ch1.Ping(i);
   }
-  uint32 unreliable_timeout_delay = CONNECTION_WRITE_CONNECT_TIMEOUT + 500u;
+  uint32_t unreliable_timeout_delay = CONNECTION_WRITE_CONNECT_TIMEOUT + 500u;
   ch1.conn()->UpdateState(unreliable_timeout_delay);
   EXPECT_EQ(Connection::STATE_WRITE_UNRELIABLE, ch1.conn()->write_state());
 
@@ -2250,7 +2327,7 @@ TEST_F(PortTest, TestWritableState) {
 
   // Wait long enough for a full timeout (past however long we've already
   // waited).
-  for (uint32 i = 1; i <= CONNECTION_WRITE_CONNECT_FAILURES; ++i) {
+  for (uint32_t i = 1; i <= CONNECTION_WRITE_CONNECT_FAILURES; ++i) {
     ch1.Ping(unreliable_timeout_delay + i);
   }
   ch1.conn()->UpdateState(unreliable_timeout_delay + CONNECTION_WRITE_TIMEOUT +
@@ -2283,7 +2360,7 @@ TEST_F(PortTest, TestTimeoutForNeverWritable) {
   EXPECT_EQ(Connection::STATE_WRITE_INIT, ch1.conn()->write_state());
 
   // Attempt to go directly to write timeout.
-  for (uint32 i = 1; i <= CONNECTION_WRITE_CONNECT_FAILURES; ++i) {
+  for (uint32_t i = 1; i <= CONNECTION_WRITE_CONNECT_FAILURES; ++i) {
     ch1.Ping(i);
   }
   ch1.conn()->UpdateState(CONNECTION_WRITE_TIMEOUT + 500u);
@@ -2409,4 +2486,60 @@ TEST_F(PortTest, TestControlledTimeout) {
 
   // The controlled port should be destroyed after 10 milliseconds.
   EXPECT_TRUE_WAIT(destroyed(), kTimeout);
+}
+
+// This test case verifies that if the role of a port changes from controlled
+// to controlling after all connections fail, the port will not be destroyed.
+TEST_F(PortTest, TestControlledToControllingNotDestroyed) {
+  UDPPort* port1 = CreateUdpPort(kLocalAddr1);
+  port1->SetIceRole(cricket::ICEROLE_CONTROLLING);
+  port1->SetIceTiebreaker(kTiebreaker1);
+
+  UDPPort* port2 = CreateUdpPort(kLocalAddr2);
+  ConnectToSignalDestroyed(port2);
+  port2->set_timeout_delay(10);  // milliseconds
+  port2->SetIceRole(cricket::ICEROLE_CONTROLLED);
+  port2->SetIceTiebreaker(kTiebreaker2);
+
+  // The connection must not be destroyed before a connection is attempted.
+  EXPECT_FALSE(destroyed());
+
+  port1->set_component(cricket::ICE_CANDIDATE_COMPONENT_DEFAULT);
+  port2->set_component(cricket::ICE_CANDIDATE_COMPONENT_DEFAULT);
+
+  // Set up channels and ensure both ports will be deleted.
+  TestChannel ch1(port1);
+  TestChannel ch2(port2);
+
+  // Simulate a connection that succeeds, and then is destroyed.
+  StartConnectAndStopChannels(&ch1, &ch2);
+  // Switch the role after all connections are destroyed.
+  EXPECT_TRUE_WAIT(ch2.conn() == nullptr, kTimeout);
+  port1->SetIceRole(cricket::ICEROLE_CONTROLLED);
+  port2->SetIceRole(cricket::ICEROLE_CONTROLLING);
+
+  // After the connection is destroyed, the port should not be destroyed.
+  rtc::Thread::Current()->ProcessMessages(kTimeout);
+  EXPECT_FALSE(destroyed());
+}
+
+TEST_F(PortTest, TestSupportsProtocol) {
+  rtc::scoped_ptr<Port> udp_port(CreateUdpPort(kLocalAddr1));
+  EXPECT_TRUE(udp_port->SupportsProtocol(UDP_PROTOCOL_NAME));
+  EXPECT_FALSE(udp_port->SupportsProtocol(TCP_PROTOCOL_NAME));
+
+  rtc::scoped_ptr<Port> stun_port(
+      CreateStunPort(kLocalAddr1, nat_socket_factory1()));
+  EXPECT_TRUE(stun_port->SupportsProtocol(UDP_PROTOCOL_NAME));
+  EXPECT_FALSE(stun_port->SupportsProtocol(TCP_PROTOCOL_NAME));
+
+  rtc::scoped_ptr<Port> tcp_port(CreateTcpPort(kLocalAddr1));
+  EXPECT_TRUE(tcp_port->SupportsProtocol(TCP_PROTOCOL_NAME));
+  EXPECT_TRUE(tcp_port->SupportsProtocol(SSLTCP_PROTOCOL_NAME));
+  EXPECT_FALSE(tcp_port->SupportsProtocol(UDP_PROTOCOL_NAME));
+
+  rtc::scoped_ptr<Port> turn_port(
+      CreateTurnPort(kLocalAddr1, nat_socket_factory1(), PROTO_UDP, PROTO_UDP));
+  EXPECT_TRUE(turn_port->SupportsProtocol(UDP_PROTOCOL_NAME));
+  EXPECT_FALSE(turn_port->SupportsProtocol(TCP_PROTOCOL_NAME));
 }

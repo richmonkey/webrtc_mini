@@ -10,8 +10,7 @@
 
 #include "webrtc/voice_engine/voe_volume_control_impl.h"
 
-#include "webrtc/system_wrappers/interface/critical_section_wrapper.h"
-#include "webrtc/system_wrappers/interface/trace.h"
+#include "webrtc/system_wrappers/include/trace.h"
 #include "webrtc/voice_engine/channel.h"
 #include "webrtc/voice_engine/include/voe_errors.h"
 #include "webrtc/voice_engine/output_mixer.h"
@@ -83,8 +82,6 @@ int VoEVolumeControlImpl::SetSpeakerVolume(unsigned int volume) {
 }
 
 int VoEVolumeControlImpl::GetSpeakerVolume(unsigned int& volume) {
-  WEBRTC_TRACE(kTraceApiCall, kTraceVoice, VoEId(_shared->instance_id(), -1),
-               "GetSpeakerVolume()");
 
   if (!_shared->statistics().Initialized()) {
     _shared->SetLastError(VE_NOT_INITED, kTraceError);
@@ -111,8 +108,6 @@ int VoEVolumeControlImpl::GetSpeakerVolume(unsigned int& volume) {
   volume =
       (uint32_t)((spkrVol * kMaxVolumeLevel + (int)(maxVol / 2)) / (maxVol));
 
-  WEBRTC_TRACE(kTraceStateInfo, kTraceVoice, VoEId(_shared->instance_id(), -1),
-               "GetSpeakerVolume() => volume=%d", volume);
   return 0;
 }
 
@@ -169,9 +164,6 @@ int VoEVolumeControlImpl::SetMicVolume(unsigned int volume) {
 }
 
 int VoEVolumeControlImpl::GetMicVolume(unsigned int& volume) {
-  WEBRTC_TRACE(kTraceApiCall, kTraceVoice, VoEId(_shared->instance_id(), -1),
-               "GetMicVolume()");
-
   if (!_shared->statistics().Initialized()) {
     _shared->SetLastError(VE_NOT_INITED, kTraceError);
     return -1;
@@ -200,9 +192,6 @@ int VoEVolumeControlImpl::GetMicVolume(unsigned int& volume) {
     // Truncate the value to the kMaxVolumeLevel.
     volume = kMaxVolumeLevel;
   }
-
-  WEBRTC_TRACE(kTraceStateInfo, kTraceVoice, VoEId(_shared->instance_id(), -1),
-               "GetMicVolume() => volume=%d", volume);
   return 0;
 }
 
@@ -230,9 +219,6 @@ int VoEVolumeControlImpl::SetInputMute(int channel, bool enable) {
 }
 
 int VoEVolumeControlImpl::GetInputMute(int channel, bool& enabled) {
-  WEBRTC_TRACE(kTraceApiCall, kTraceVoice, VoEId(_shared->instance_id(), -1),
-               "GetInputMute(channel=%d)", channel);
-
   if (!_shared->statistics().Initialized()) {
     _shared->SetLastError(VE_NOT_INITED, kTraceError);
     return -1;
@@ -249,31 +235,21 @@ int VoEVolumeControlImpl::GetInputMute(int channel, bool& enabled) {
     }
     enabled = channelPtr->Mute();
   }
-  WEBRTC_TRACE(kTraceStateInfo, kTraceVoice, VoEId(_shared->instance_id(), -1),
-               "GetInputMute() => enabled = %d", (int)enabled);
   return 0;
 }
 
 int VoEVolumeControlImpl::GetSpeechInputLevel(unsigned int& level) {
-  WEBRTC_TRACE(kTraceApiCall, kTraceVoice, VoEId(_shared->instance_id(), -1),
-               "GetSpeechInputLevel()");
-
   if (!_shared->statistics().Initialized()) {
     _shared->SetLastError(VE_NOT_INITED, kTraceError);
     return -1;
   }
   int8_t currentLevel = _shared->transmit_mixer()->AudioLevel();
   level = static_cast<unsigned int>(currentLevel);
-  WEBRTC_TRACE(kTraceStateInfo, kTraceVoice, VoEId(_shared->instance_id(), -1),
-               "GetSpeechInputLevel() => %d", level);
   return 0;
 }
 
 int VoEVolumeControlImpl::GetSpeechOutputLevel(int channel,
                                                unsigned int& level) {
-  WEBRTC_TRACE(kTraceApiCall, kTraceVoice, VoEId(_shared->instance_id(), -1),
-               "GetSpeechOutputLevel(channel=%d, level=?)", channel);
-
   if (!_shared->statistics().Initialized()) {
     _shared->SetLastError(VE_NOT_INITED, kTraceError);
     return -1;
@@ -294,25 +270,17 @@ int VoEVolumeControlImpl::GetSpeechOutputLevel(int channel,
 }
 
 int VoEVolumeControlImpl::GetSpeechInputLevelFullRange(unsigned int& level) {
-  WEBRTC_TRACE(kTraceApiCall, kTraceVoice, VoEId(_shared->instance_id(), -1),
-               "GetSpeechInputLevelFullRange(level=?)");
-
   if (!_shared->statistics().Initialized()) {
     _shared->SetLastError(VE_NOT_INITED, kTraceError);
     return -1;
   }
   int16_t currentLevel = _shared->transmit_mixer()->AudioLevelFullRange();
   level = static_cast<unsigned int>(currentLevel);
-  WEBRTC_TRACE(kTraceStateInfo, kTraceVoice, VoEId(_shared->instance_id(), -1),
-               "GetSpeechInputLevelFullRange() => %d", level);
   return 0;
 }
 
 int VoEVolumeControlImpl::GetSpeechOutputLevelFullRange(int channel,
                                                         unsigned int& level) {
-  WEBRTC_TRACE(kTraceApiCall, kTraceVoice, VoEId(_shared->instance_id(), -1),
-               "GetSpeechOutputLevelFullRange(channel=%d, level=?)", channel);
-
   if (!_shared->statistics().Initialized()) {
     _shared->SetLastError(VE_NOT_INITED, kTraceError);
     return -1;
@@ -361,8 +329,6 @@ int VoEVolumeControlImpl::SetChannelOutputVolumeScaling(int channel,
 
 int VoEVolumeControlImpl::GetChannelOutputVolumeScaling(int channel,
                                                         float& scaling) {
-  WEBRTC_TRACE(kTraceApiCall, kTraceVoice, VoEId(_shared->instance_id(), -1),
-               "GetChannelOutputVolumeScaling(channel=%d, scaling=?)", channel);
   if (!_shared->statistics().Initialized()) {
     _shared->SetLastError(VE_NOT_INITED, kTraceError);
     return -1;
@@ -422,9 +388,6 @@ int VoEVolumeControlImpl::SetOutputVolumePan(int channel,
 int VoEVolumeControlImpl::GetOutputVolumePan(int channel,
                                              float& left,
                                              float& right) {
-  WEBRTC_TRACE(kTraceApiCall, kTraceVoice, VoEId(_shared->instance_id(), -1),
-               "GetOutputVolumePan(channel=%d, left=?, right=?)", channel);
-
   if (!_shared->statistics().Initialized()) {
     _shared->SetLastError(VE_NOT_INITED, kTraceError);
     return -1;

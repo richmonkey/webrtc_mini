@@ -11,6 +11,7 @@
 #import "ARDAppClient+Internal.h"
 
 #if defined(WEBRTC_IOS)
+#import "webrtc/base/objc/RTCTracing.h"
 #import "RTCAVFoundationVideoSource.h"
 #endif
 #import "RTCFileLogger.h"
@@ -47,6 +48,12 @@ static NSInteger const kARDAppClientErrorCreateSDP = -3;
 static NSInteger const kARDAppClientErrorSetSDP = -4;
 static NSInteger const kARDAppClientErrorInvalidClient = -5;
 static NSInteger const kARDAppClientErrorInvalidRoom = -6;
+
+// TODO(tkchin): Remove guard once rtc_base_objc compiles on Mac.
+#if defined(WEBRTC_IOS)
+// TODO(tkchin): Add this as a UI option.
+static BOOL const kARDAppClientEnableTracing = NO;
+#endif
 
 // We need a proxy to NSTimer because it causes a strong retain cycle. When
 // using the proxy, |invalidate| must be called before it properly deallocs.
@@ -99,6 +106,7 @@ static NSInteger const kARDAppClientErrorInvalidRoom = -6;
 @synthesize delegate = _delegate;
 @synthesize roomServerClient = _roomServerClient;
 @synthesize channel = _channel;
+@synthesize loopbackChannel = _loopbackChannel;
 @synthesize turnClient = _turnClient;
 @synthesize peerConnection = _peerConnection;
 @synthesize factory = _factory;
@@ -113,6 +121,8 @@ static NSInteger const kARDAppClientErrorInvalidRoom = -6;
 @synthesize webSocketRestURL = _websocketRestURL;
 @synthesize defaultPeerConnectionConstraints =
     _defaultPeerConnectionConstraints;
+@synthesize isLoopback = _isLoopback;
+@synthesize isAudioOnly = _isAudioOnly;
 
 - (instancetype)init {
   if (self = [super init]) {
@@ -198,10 +208,24 @@ static NSInteger const kARDAppClientErrorInvalidRoom = -6;
 }
 
 - (void)connectToRoomWithId:(NSString *)roomId
-                    options:(NSDictionary *)options {
+                 isLoopback:(BOOL)isLoopback
+                isAudioOnly:(BOOL)isAudioOnly {
   NSParameterAssert(roomId.length);
   NSParameterAssert(_state == kARDAppClientStateDisconnected);
+  _isLoopback = isLoopback;
+  _isAudioOnly = isAudioOnly;
   self.state = kARDAppClientStateConnecting;
+
+#if defined(WEBRTC_IOS)
+  if (kARDAppClientEnableTracing) {
+    NSArray *paths = NSSearchPathForDirectoriesInDomains(
+        NSDocumentDirectory, NSUserDomainMask, YES);
+    NSString *documentsDirPath = paths.firstObject;
+    NSString *filePath =
+        [documentsDirPath stringByAppendingPathComponent:@"webrtc-trace.txt"];
+    RTCStartInternalCapture(filePath);
+  }
+#endif
 
   // Request TURN.
   __weak ARDAppClient *weakSelf = self;
@@ -219,6 +243,7 @@ static NSInteger const kARDAppClientErrorInvalidRoom = -6;
 
   // Join room on room server.
   [_roomServerClient joinRoomWithRoomId:roomId
+                             isLoopback:isLoopback
       completionHandler:^(ARDJoinResponse *response, NSError *error) {
     ARDAppClient *strongSelf = weakSelf;
     if (error) {
@@ -278,6 +303,9 @@ static NSInteger const kARDAppClientErrorInvalidRoom = -6;
   _messageQueue = [NSMutableArray array];
   _peerConnection = nil;
   self.state = kARDAppClientStateDisconnected;
+#if defined(WEBRTC_IOS)
+  RTCStopInternalCapture();
+#endif
 }
 
 #pragma mark - ARDSignalingChannelDelegate
@@ -579,14 +607,17 @@ static NSInteger const kARDAppClientErrorInvalidRoom = -6;
   // TODO(tkchin): local video capture for OSX. See
   // https://code.google.com/p/webrtc/issues/detail?id=3417.
 #if !TARGET_IPHONE_SIMULATOR && TARGET_OS_IPHONE
-  RTCMediaConstraints *mediaConstraints = [self defaultMediaStreamConstraints];
-  RTCAVFoundationVideoSource *source =
-      [[RTCAVFoundationVideoSource alloc] initWithFactory:_factory
-                                              constraints:mediaConstraints];
-  localVideoTrack =
-      [[RTCVideoTrack alloc] initWithFactory:_factory
-                                      source:source
-                                     trackId:@"ARDAMSv0"];
+  if (!_isAudioOnly) {
+    RTCMediaConstraints *mediaConstraints =
+        [self defaultMediaStreamConstraints];
+    RTCAVFoundationVideoSource *source =
+        [[RTCAVFoundationVideoSource alloc] initWithFactory:_factory
+                                                constraints:mediaConstraints];
+    localVideoTrack =
+        [[RTCVideoTrack alloc] initWithFactory:_factory
+                                        source:source
+                                       trackId:@"ARDAMSv0"];
+  }
 #endif
   return localVideoTrack;
 }
@@ -603,8 +634,16 @@ static NSInteger const kARDAppClientErrorInvalidRoom = -6;
         [[ARDWebSocketChannel alloc] initWithURL:_websocketURL
                                          restURL:_websocketRestURL
                                         delegate:self];
+    if (_isLoopback) {
+      _loopbackChannel =
+          [[ARDLoopbackWebSocketChannel alloc] initWithURL:_websocketURL
+                                                   restURL:_websocketRestURL];
+    }
   }
   [_channel registerForRoomId:_roomId clientId:_clientId];
+  if (_isLoopback) {
+    [_loopbackChannel registerForRoomId:_roomId clientId:@"LOOPBACK_CLIENT_ID"];
+  }
 }
 
 #pragma mark - Defaults
@@ -637,8 +676,9 @@ static NSInteger const kARDAppClientErrorInvalidRoom = -6;
   if (_defaultPeerConnectionConstraints) {
     return _defaultPeerConnectionConstraints;
   }
+  NSString *value = _isLoopback ? @"false" : @"true";
   NSArray *optionalConstraints = @[
-      [[RTCPair alloc] initWithKey:@"DtlsSrtpKeyAgreement" value:@"true"]
+      [[RTCPair alloc] initWithKey:@"DtlsSrtpKeyAgreement" value:value]
   ];
   RTCMediaConstraints* constraints =
       [[RTCMediaConstraints alloc]

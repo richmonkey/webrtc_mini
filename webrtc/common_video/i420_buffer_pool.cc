@@ -8,7 +8,7 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
-#include "webrtc/common_video/interface/i420_buffer_pool.h"
+#include "webrtc/common_video/include/i420_buffer_pool.h"
 
 #include "webrtc/base/checks.h"
 
@@ -32,7 +32,7 @@ class PooledI420Buffer : public webrtc::VideoFrameBuffer {
   uint8_t* MutableData(webrtc::PlaneType type) override {
     // Make the HasOneRef() check here instead of in |buffer_|, because the pool
     // also has a reference to |buffer_|.
-    DCHECK(HasOneRef());
+    RTC_DCHECK(HasOneRef());
     return const_cast<uint8_t*>(buffer_->data(type));
   }
   int stride(webrtc::PlaneType type) const override {
@@ -53,7 +53,8 @@ class PooledI420Buffer : public webrtc::VideoFrameBuffer {
 
 namespace webrtc {
 
-I420BufferPool::I420BufferPool() {
+I420BufferPool::I420BufferPool(bool zero_initialize)
+    : zero_initialize_(zero_initialize) {
   Release();
 }
 
@@ -64,7 +65,7 @@ void I420BufferPool::Release() {
 
 rtc::scoped_refptr<VideoFrameBuffer> I420BufferPool::CreateBuffer(int width,
                                                                   int height) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  RTC_DCHECK(thread_checker_.CalledOnValidThread());
   // Release buffers with wrong resolution.
   for (auto it = buffers_.begin(); it != buffers_.end();) {
     if ((*it)->width() != width || (*it)->height() != height)
@@ -83,7 +84,11 @@ rtc::scoped_refptr<VideoFrameBuffer> I420BufferPool::CreateBuffer(int width,
       return new rtc::RefCountedObject<PooledI420Buffer>(buffer);
   }
   // Allocate new buffer.
-  buffers_.push_back(new rtc::RefCountedObject<I420Buffer>(width, height));
+  rtc::scoped_refptr<I420Buffer> buffer = new rtc::RefCountedObject<I420Buffer>(
+      width, height);
+  if (zero_initialize_)
+    buffer->InitializeData();
+  buffers_.push_back(buffer);
   return new rtc::RefCountedObject<PooledI420Buffer>(buffers_.back());
 }
 

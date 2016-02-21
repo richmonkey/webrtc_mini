@@ -8,7 +8,7 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
-#include "webrtc/system_wrappers/interface/clock.h"
+#include "webrtc/system_wrappers/include/clock.h"
 
 #if defined(_WIN32)
 // Windows needs to be included before mmsystem.h
@@ -20,8 +20,8 @@
 #endif
 
 #include "webrtc/base/criticalsection.h"
-#include "webrtc/system_wrappers/interface/rw_lock_wrapper.h"
-#include "webrtc/system_wrappers/interface/tick_util.h"
+#include "webrtc/system_wrappers/include/rw_lock_wrapper.h"
+#include "webrtc/system_wrappers/include/tick_util.h"
 
 namespace webrtc {
 
@@ -179,7 +179,7 @@ class WindowsRealTimeClock : public RealTimeClock {
   }
 
   // mutable as time-accessing functions are const.
-  mutable rtc::CriticalSection crit_;
+  rtc::CriticalSection crit_;
   mutable DWORD last_time_ms_;
   mutable LONG num_timer_wraps_;
   const ReferencePoint ref_point_;

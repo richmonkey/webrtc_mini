@@ -23,6 +23,32 @@
             'h264_objc.mm',
           ],
         }],
+        # TODO(hbos): Consider renaming this flag and the below macro to
+        # something which helps distinguish OpenH264/FFmpeg from other H264
+        # implementations.
+        ['rtc_use_h264==1', {
+          'defines': [
+            'WEBRTC_USE_H264',
+          ],
+          'conditions': [
+            ['rtc_initialize_ffmpeg==1', {
+              'defines': [
+                'WEBRTC_INITIALIZE_FFMPEG',
+              ],
+            }],
+          ],
+          'dependencies': [
+            '<(DEPTH)/third_party/ffmpeg/ffmpeg.gyp:ffmpeg',
+            '<(DEPTH)/third_party/openh264/openh264.gyp:openh264_encoder',
+            '<(webrtc_root)/common_video/common_video.gyp:common_video',
+          ],
+          'sources': [
+            'h264_decoder_impl.cc',
+            'h264_decoder_impl.h',
+            'h264_encoder_impl.cc',
+            'h264_encoder_impl.h',
+          ],
+        }],
       ],
       'sources': [
         'h264.cc',
@@ -42,6 +68,7 @@
           'link_settings': {
             'xcode_settings': {
               'OTHER_LDFLAGS': [
+                '-framework CoreFoundation',
                 '-framework CoreMedia',
                 '-framework CoreVideo',
                 '-framework VideoToolbox',

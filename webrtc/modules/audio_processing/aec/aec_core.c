@@ -29,8 +29,9 @@
 #include "webrtc/modules/audio_processing/aec/aec_common.h"
 #include "webrtc/modules/audio_processing/aec/aec_core_internal.h"
 #include "webrtc/modules/audio_processing/aec/aec_rdft.h"
+#include "webrtc/modules/audio_processing/logging/aec_logging.h"
 #include "webrtc/modules/audio_processing/utility/delay_estimator_wrapper.h"
-#include "webrtc/system_wrappers/interface/cpu_features_wrapper.h"
+#include "webrtc/system_wrappers/include/cpu_features_wrapper.h"
 #include "webrtc/typedefs.h"
 
 // Buffer size (samples)
@@ -42,7 +43,6 @@ static const int countLen = 50;
 static const int kDelayMetricsAggregationWindow = 1250;  // 5 seconds at 16 kHz.
 
 // Quantities to control H band scaling for SWB input
-static const int flagHbandCn = 1;  // flag for adding comfort noise in H band
 static const float cnScaleHband =
     (float)0.4;  // scale for comfort noise in H band
 // Initial bin for averaging nlp gain in low band
@@ -119,9 +119,7 @@ const float WebRtcAec_kNormalSmoothingCoefficients[2][2] = {{0.9f, 0.1f},
                                                             {0.93f, 0.07f}};
 
 // Number of partitions forming the NLP's "preferred" bands.
-enum {
-  kPrefBandSize = 24
-};
+enum { kPrefBandSize = 24 };
 
 #ifdef WEBRTC_AEC_DEBUG_DUMP
 extern int webrtc_aec_instance_count;
@@ -133,6 +131,9 @@ WebRtcAecFilterAdaptation WebRtcAec_FilterAdaptation;
 WebRtcAecOverdriveAndSuppress WebRtcAec_OverdriveAndSuppress;
 WebRtcAecComfortNoise WebRtcAec_ComfortNoise;
 WebRtcAecSubBandCoherence WebRtcAec_SubbandCoherence;
+WebRtcAecStoreAsComplex WebRtcAec_StoreAsComplex;
+WebRtcAecPartitionDelay WebRtcAec_PartitionDelay;
+WebRtcAecWindowData WebRtcAec_WindowData;
 
 __inline static float MulRe(float aRe, float aIm, float bRe, float bIm) {
   return aRe * bRe - aIm * bIm;
@@ -149,40 +150,44 @@ static int CmpFloat(const void* a, const void* b) {
   return (*da > *db) - (*da < *db);
 }
 
-static void FilterFar(AecCore* aec, float yf[2][PART_LEN1]) {
+static void FilterFar(int num_partitions,
+                      int x_fft_buf_block_pos,
+                      float x_fft_buf[2][kExtendedNumPartitions * PART_LEN1],
+                      float h_fft_buf[2][kExtendedNumPartitions * PART_LEN1],
+                      float y_fft[2][PART_LEN1]) {
   int i;
-  for (i = 0; i < aec->num_partitions; i++) {
+  for (i = 0; i < num_partitions; i++) {
     int j;
-    int xPos = (i + aec->xfBufBlockPos) * PART_LEN1;
+    int xPos = (i + x_fft_buf_block_pos) * PART_LEN1;
     int pos = i * PART_LEN1;
     // Check for wrap
-    if (i + aec->xfBufBlockPos >= aec->num_partitions) {
-      xPos -= aec->num_partitions * (PART_LEN1);
+    if (i + x_fft_buf_block_pos >= num_partitions) {
+      xPos -= num_partitions * (PART_LEN1);
     }
 
     for (j = 0; j < PART_LEN1; j++) {
-      yf[0][j] += MulRe(aec->xfBuf[0][xPos + j],
-                        aec->xfBuf[1][xPos + j],
-                        aec->wfBuf[0][pos + j],
-                        aec->wfBuf[1][pos + j]);
-      yf[1][j] += MulIm(aec->xfBuf[0][xPos + j],
-                        aec->xfBuf[1][xPos + j],
-                        aec->wfBuf[0][pos + j],
-                        aec->wfBuf[1][pos + j]);
+      y_fft[0][j] += MulRe(x_fft_buf[0][xPos + j], x_fft_buf[1][xPos + j],
+                           h_fft_buf[0][pos + j], h_fft_buf[1][pos + j]);
+      y_fft[1][j] += MulIm(x_fft_buf[0][xPos + j], x_fft_buf[1][xPos + j],
+                           h_fft_buf[0][pos + j], h_fft_buf[1][pos + j]);
     }
   }
 }
 
-static void ScaleErrorSignal(AecCore* aec, float ef[2][PART_LEN1]) {
-  const float mu = aec->extended_filter_enabled ? kExtendedMu : aec->normal_mu;
-  const float error_threshold = aec->extended_filter_enabled
+static void ScaleErrorSignal(int extended_filter_enabled,
+                             float normal_mu,
+                             float normal_error_threshold,
+                             float x_pow[PART_LEN1],
+                             float ef[2][PART_LEN1]) {
+  const float mu = extended_filter_enabled ? kExtendedMu : normal_mu;
+  const float error_threshold = extended_filter_enabled
                                     ? kExtendedErrorThreshold
-                                    : aec->normal_error_threshold;
+                                    : normal_error_threshold;
   int i;
   float abs_ef;
   for (i = 0; i < (PART_LEN1); i++) {
-    ef[0][i] /= (aec->xPow[i] + 1e-10f);
-    ef[1][i] /= (aec->xPow[i] + 1e-10f);
+    ef[0][i] /= (x_pow[i] + 1e-10f);
+    ef[1][i] /= (x_pow[i] + 1e-10f);
     abs_ef = sqrtf(ef[0][i] * ef[0][i] + ef[1][i] * ef[1][i]);
 
     if (abs_ef > error_threshold) {
@@ -197,59 +202,33 @@ static void ScaleErrorSignal(AecCore* aec, float ef[2][PART_LEN1]) {
   }
 }
 
-// Time-unconstrined filter adaptation.
-// TODO(andrew): consider for a low-complexity mode.
-// static void FilterAdaptationUnconstrained(AecCore* aec, float *fft,
-//                                          float ef[2][PART_LEN1]) {
-//  int i, j;
-//  for (i = 0; i < aec->num_partitions; i++) {
-//    int xPos = (i + aec->xfBufBlockPos)*(PART_LEN1);
-//    int pos;
-//    // Check for wrap
-//    if (i + aec->xfBufBlockPos >= aec->num_partitions) {
-//      xPos -= aec->num_partitions * PART_LEN1;
-//    }
-//
-//    pos = i * PART_LEN1;
-//
-//    for (j = 0; j < PART_LEN1; j++) {
-//      aec->wfBuf[0][pos + j] += MulRe(aec->xfBuf[0][xPos + j],
-//                                      -aec->xfBuf[1][xPos + j],
-//                                      ef[0][j], ef[1][j]);
-//      aec->wfBuf[1][pos + j] += MulIm(aec->xfBuf[0][xPos + j],
-//                                      -aec->xfBuf[1][xPos + j],
-//                                      ef[0][j], ef[1][j]);
-//    }
-//  }
-//}
-
-static void FilterAdaptation(AecCore* aec, float* fft, float ef[2][PART_LEN1]) {
+static void FilterAdaptation(
+    int num_partitions,
+    int x_fft_buf_block_pos,
+    float x_fft_buf[2][kExtendedNumPartitions * PART_LEN1],
+    float e_fft[2][PART_LEN1],
+    float h_fft_buf[2][kExtendedNumPartitions * PART_LEN1]) {
   int i, j;
-  for (i = 0; i < aec->num_partitions; i++) {
-    int xPos = (i + aec->xfBufBlockPos) * (PART_LEN1);
+  float fft[PART_LEN2];
+  for (i = 0; i < num_partitions; i++) {
+    int xPos = (i + x_fft_buf_block_pos) * (PART_LEN1);
     int pos;
     // Check for wrap
-    if (i + aec->xfBufBlockPos >= aec->num_partitions) {
-      xPos -= aec->num_partitions * PART_LEN1;
+    if (i + x_fft_buf_block_pos >= num_partitions) {
+      xPos -= num_partitions * PART_LEN1;
     }
 
     pos = i * PART_LEN1;
 
     for (j = 0; j < PART_LEN; j++) {
-
-      fft[2 * j] = MulRe(aec->xfBuf[0][xPos + j],
-                         -aec->xfBuf[1][xPos + j],
-                         ef[0][j],
-                         ef[1][j]);
-      fft[2 * j + 1] = MulIm(aec->xfBuf[0][xPos + j],
-                             -aec->xfBuf[1][xPos + j],
-                             ef[0][j],
-                             ef[1][j]);
+      fft[2 * j] = MulRe(x_fft_buf[0][xPos + j], -x_fft_buf[1][xPos + j],
+                         e_fft[0][j], e_fft[1][j]);
+      fft[2 * j + 1] = MulIm(x_fft_buf[0][xPos + j], -x_fft_buf[1][xPos + j],
+                             e_fft[0][j], e_fft[1][j]);
     }
-    fft[1] = MulRe(aec->xfBuf[0][xPos + PART_LEN],
-                   -aec->xfBuf[1][xPos + PART_LEN],
-                   ef[0][PART_LEN],
-                   ef[1][PART_LEN]);
+    fft[1] =
+        MulRe(x_fft_buf[0][xPos + PART_LEN], -x_fft_buf[1][xPos + PART_LEN],
+              e_fft[0][PART_LEN], e_fft[1][PART_LEN]);
 
     aec_rdft_inverse_128(fft);
     memset(fft + PART_LEN, 0, sizeof(float) * PART_LEN);
@@ -263,12 +242,12 @@ static void FilterAdaptation(AecCore* aec, float* fft, float ef[2][PART_LEN1]) {
     }
     aec_rdft_forward_128(fft);
 
-    aec->wfBuf[0][pos] += fft[0];
-    aec->wfBuf[0][pos + PART_LEN] += fft[1];
+    h_fft_buf[0][pos] += fft[0];
+    h_fft_buf[0][pos + PART_LEN] += fft[1];
 
     for (j = 1; j < PART_LEN; j++) {
-      aec->wfBuf[0][pos + j] += fft[2 * j];
-      aec->wfBuf[1][pos + j] += fft[2 * j + 1];
+      h_fft_buf[0][pos + j] += fft[2 * j];
+      h_fft_buf[1][pos + j] += fft[2 * j + 1];
     }
   }
 }
@@ -311,7 +290,7 @@ static int PartitionDelay(const AecCore* aec) {
     float wfEn = 0;
     for (j = 0; j < PART_LEN1; j++) {
       wfEn += aec->wfBuf[0][pos + j] * aec->wfBuf[0][pos + j] +
-          aec->wfBuf[1][pos + j] * aec->wfBuf[1][pos + j];
+              aec->wfBuf[1][pos + j] * aec->wfBuf[1][pos + j];
     }
 
     if (wfEn > wfEnMax) {
@@ -332,16 +311,18 @@ const float WebRtcAec_kMinFarendPSD = 15;
 //  - sde : cross-PSD of near-end and residual echo
 //  - sxd : cross-PSD of near-end and far-end
 //
-// In addition to updating the PSDs, also the filter diverge state is determined
-// upon actions are taken.
+// In addition to updating the PSDs, also the filter diverge state is
+// determined.
 static void SmoothedPSD(AecCore* aec,
                         float efw[2][PART_LEN1],
                         float dfw[2][PART_LEN1],
-                        float xfw[2][PART_LEN1]) {
+                        float xfw[2][PART_LEN1],
+                        int* extreme_filter_divergence) {
   // Power estimate smoothing coefficients.
-  const float* ptrGCoh = aec->extended_filter_enabled
-      ? WebRtcAec_kExtendedSmoothingCoefficients[aec->mult - 1]
-      : WebRtcAec_kNormalSmoothingCoefficients[aec->mult - 1];
+  const float* ptrGCoh =
+      aec->extended_filter_enabled
+          ? WebRtcAec_kExtendedSmoothingCoefficients[aec->mult - 1]
+          : WebRtcAec_kNormalSmoothingCoefficients[aec->mult - 1];
   int i;
   float sdSum = 0, seSum = 0;
 
@@ -354,11 +335,10 @@ static void SmoothedPSD(AecCore* aec,
     // The threshold is not arbitrarily chosen, but balances protection and
     // adverse interaction with the algorithm's tuning.
     // TODO(bjornv): investigate further why this is so sensitive.
-    aec->sx[i] =
-        ptrGCoh[0] * aec->sx[i] +
-        ptrGCoh[1] * WEBRTC_SPL_MAX(
-            xfw[0][i] * xfw[0][i] + xfw[1][i] * xfw[1][i],
-            WebRtcAec_kMinFarendPSD);
+    aec->sx[i] = ptrGCoh[0] * aec->sx[i] +
+                 ptrGCoh[1] * WEBRTC_SPL_MAX(
+                                  xfw[0][i] * xfw[0][i] + xfw[1][i] * xfw[1][i],
+                                  WebRtcAec_kMinFarendPSD);
 
     aec->sde[i][0] =
         ptrGCoh[0] * aec->sde[i][0] +
@@ -378,15 +358,12 @@ static void SmoothedPSD(AecCore* aec,
     seSum += aec->se[i];
   }
 
-  // Divergent filter safeguard.
+  // Divergent filter safeguard update.
   aec->divergeState = (aec->divergeState ? 1.05f : 1.0f) * seSum > sdSum;
 
-  if (aec->divergeState)
-    memcpy(efw, dfw, sizeof(efw[0][0]) * 2 * PART_LEN1);
-
-  // Reset if error is significantly larger than nearend (13 dB).
-  if (!aec->extended_filter_enabled && seSum > (19.95f * sdSum))
-    memset(aec->wfBuf, 0, sizeof(aec->wfBuf));
+  // Signal extreme filter divergence if the error is significantly larger
+  // than the nearend (13 dB).
+  *extreme_filter_divergence = (seSum > (19.95f * sdSum));
 }
 
 // Window time domain data to be used by the fft.
@@ -415,32 +392,15 @@ __inline static void StoreAsComplex(const float* data,
 
 static void SubbandCoherence(AecCore* aec,
                              float efw[2][PART_LEN1],
+                             float dfw[2][PART_LEN1],
                              float xfw[2][PART_LEN1],
                              float* fft,
                              float* cohde,
-                             float* cohxd) {
-  float dfw[2][PART_LEN1];
+                             float* cohxd,
+                             int* extreme_filter_divergence) {
   int i;
 
-  if (aec->delayEstCtr == 0)
-    aec->delayIdx = PartitionDelay(aec);
-
-  // Use delayed far.
-  memcpy(xfw,
-         aec->xfwBuf + aec->delayIdx * PART_LEN1,
-         sizeof(xfw[0][0]) * 2 * PART_LEN1);
-
-  // Windowed near fft
-  WindowData(fft, aec->dBuf);
-  aec_rdft_forward_128(fft);
-  StoreAsComplex(fft, dfw);
-
-  // Windowed error fft
-  WindowData(fft, aec->eBuf);
-  aec_rdft_forward_128(fft);
-  StoreAsComplex(fft, efw);
-
-  SmoothedPSD(aec, efw, dfw, xfw);
+  SmoothedPSD(aec, efw, dfw, xfw, extreme_filter_divergence);
 
   // Subband coherence
   for (i = 0; i < PART_LEN1; i++) {
@@ -456,23 +416,23 @@ static void SubbandCoherence(AecCore* aec,
 static void GetHighbandGain(const float* lambda, float* nlpGainHband) {
   int i;
 
-  nlpGainHband[0] = (float)0.0;
+  *nlpGainHband = (float)0.0;
   for (i = freqAvgIc; i < PART_LEN1 - 1; i++) {
-    nlpGainHband[0] += lambda[i];
+    *nlpGainHband += lambda[i];
   }
-  nlpGainHband[0] /= (float)(PART_LEN1 - 1 - freqAvgIc);
+  *nlpGainHband /= (float)(PART_LEN1 - 1 - freqAvgIc);
 }
 
 static void ComfortNoise(AecCore* aec,
                          float efw[2][PART_LEN1],
-                         complex_t* comfortNoiseHband,
+                         float comfortNoiseHband[2][PART_LEN1],
                          const float* noisePow,
                          const float* lambda) {
   int i, num;
   float rand[PART_LEN];
   float noise, noiseAvg, tmp, tmpAvg;
   int16_t randW16[PART_LEN];
-  complex_t u[PART_LEN1];
+  float u[2][PART_LEN1];
 
   const float pi2 = 6.28318530717959f;
 
@@ -484,22 +444,22 @@ static void ComfortNoise(AecCore* aec,
 
   // Reject LF noise
   u[0][0] = 0;
-  u[0][1] = 0;
+  u[1][0] = 0;
   for (i = 1; i < PART_LEN1; i++) {
     tmp = pi2 * rand[i - 1];
 
     noise = sqrtf(noisePow[i]);
-    u[i][0] = noise * cosf(tmp);
-    u[i][1] = -noise * sinf(tmp);
+    u[0][i] = noise * cosf(tmp);
+    u[1][i] = -noise * sinf(tmp);
   }
-  u[PART_LEN][1] = 0;
+  u[1][PART_LEN] = 0;
 
   for (i = 0; i < PART_LEN1; i++) {
     // This is the proper weighting to match the background noise power
     tmp = sqrtf(WEBRTC_SPL_MAX(1 - lambda[i] * lambda[i], 0));
     // tmp = 1 - lambda[i];
-    efw[0][i] += tmp * u[i][0];
-    efw[1][i] += tmp * u[i][1];
+    efw[0][i] += tmp * u[0][i];
+    efw[1][i] += tmp * u[1][i];
   }
 
   // For H band comfort noise
@@ -507,8 +467,7 @@ static void ComfortNoise(AecCore* aec,
   noiseAvg = 0.0;
   tmpAvg = 0.0;
   num = 0;
-  if (aec->num_bands > 1 && flagHbandCn == 1) {
-
+  if (aec->num_bands > 1) {
     // average noise scale
     // average over second half of freq spectrum (i.e., 4->8khz)
     // TODO: we shouldn't need num. We know how many elements we're summing.
@@ -532,21 +491,24 @@ static void ComfortNoise(AecCore* aec,
     // TODO: we should probably have a new random vector here.
     // Reject LF noise
     u[0][0] = 0;
-    u[0][1] = 0;
+    u[1][0] = 0;
     for (i = 1; i < PART_LEN1; i++) {
       tmp = pi2 * rand[i - 1];
 
       // Use average noise for H band
-      u[i][0] = noiseAvg * (float)cos(tmp);
-      u[i][1] = -noiseAvg * (float)sin(tmp);
+      u[0][i] = noiseAvg * (float)cos(tmp);
+      u[1][i] = -noiseAvg * (float)sin(tmp);
     }
-    u[PART_LEN][1] = 0;
+    u[1][PART_LEN] = 0;
 
     for (i = 0; i < PART_LEN1; i++) {
       // Use average NLP weight for H band
-      comfortNoiseHband[i][0] = tmpAvg * u[i][0];
-      comfortNoiseHband[i][1] = tmpAvg * u[i][1];
+      comfortNoiseHband[0][i] = tmpAvg * u[0][i];
+      comfortNoiseHband[1][i] = tmpAvg * u[1][i];
     }
+  } else {
+    memset(comfortNoiseHband, 0,
+           2 * PART_LEN1 * sizeof(comfortNoiseHband[0][0]));
   }
 }
 
@@ -587,41 +549,17 @@ static void InitMetrics(AecCore* self) {
   InitStats(&self->rerl);
 }
 
-static void UpdateLevel(PowerLevel* level, float in[2][PART_LEN1]) {
-  // Do the energy calculation in the frequency domain. The FFT is performed on
-  // a segment of PART_LEN2 samples due to overlap, but we only want the energy
-  // of half that data (the last PART_LEN samples). Parseval's relation states
-  // that the energy is preserved according to
-  //
-  // \sum_{n=0}^{N-1} |x(n)|^2 = 1/N * \sum_{n=0}^{N-1} |X(n)|^2
-  //                           = ENERGY,
-  //
-  // where N = PART_LEN2. Since we are only interested in calculating the energy
-  // for the last PART_LEN samples we approximate by calculating ENERGY and
-  // divide by 2,
-  //
-  // \sum_{n=N/2}^{N-1} |x(n)|^2 ~= ENERGY / 2
-  //
-  // Since we deal with real valued time domain signals we only store frequency
-  // bins [0, PART_LEN], which is what |in| consists of. To calculate ENERGY we
-  // need to add the contribution from the missing part in
-  // [PART_LEN+1, PART_LEN2-1]. These values are, up to a phase shift, identical
-  // with the values in [1, PART_LEN-1], hence multiply those values by 2. This
-  // is the values in the for loop below, but multiplication by 2 and division
-  // by 2 cancel.
+static float CalculatePower(const float* in, size_t num_samples) {
+  size_t k;
+  float energy = 0.0f;
 
-  // TODO(bjornv): Investigate reusing energy calculations performed at other
-  // places in the code.
-  int k = 1;
-  // Imaginary parts are zero at end points and left out of the calculation.
-  float energy = (in[0][0] * in[0][0]) / 2;
-  energy += (in[0][PART_LEN] * in[0][PART_LEN]) / 2;
-
-  for (k = 1; k < PART_LEN; k++) {
-    energy += (in[0][k] * in[0][k] + in[1][k] * in[1][k]);
+  for (k = 0; k < num_samples; ++k) {
+    energy += in[k] * in[k];
   }
-  energy /= PART_LEN2;
+  return energy / num_samples;
+}
 
+static void UpdateLevel(PowerLevel* level, float energy) {
   level->sfrsum += energy;
   level->sfrcounter++;
 
@@ -652,7 +590,12 @@ static void UpdateMetrics(AecCore* aec) {
   const float actThresholdNoisy = 8.0f;
   const float actThresholdClean = 40.0f;
   const float safety = 0.99995f;
-  const float noisyPower = 300000.0f;
+
+  // To make noisePower consistent with the legacy code, a factor of
+  // 2.0f / PART_LEN2 is applied to noisyPower, since the legacy code uses
+  // the energy of a frame as the audio levels, while the new code uses a
+  // a per-sample energy (i.e., power).
+  const float noisyPower = 300000.0f * 2.0f / PART_LEN2;
 
   float actThreshold;
   float echo, suppressedEcho;
@@ -662,7 +605,6 @@ static void UpdateMetrics(AecCore* aec) {
   }
 
   if (aec->farlevel.frcounter == 0) {
-
     if (aec->farlevel.minlevel < noisyPower) {
       actThreshold = actThresholdClean;
     } else {
@@ -673,10 +615,8 @@ static void UpdateMetrics(AecCore* aec) {
         (aec->farlevel.sfrcounter == 0)
 
         // Estimate in active far-end segments only
-        &&
-        (aec->farlevel.averagelevel >
-         (actThreshold * aec->farlevel.minlevel))) {
-
+        && (aec->farlevel.averagelevel >
+            (actThreshold * aec->farlevel.minlevel))) {
       // Subtract noise power
       echo = aec->nearlevel.averagelevel - safety * aec->nearlevel.minlevel;
 
@@ -708,12 +648,11 @@ static void UpdateMetrics(AecCore* aec) {
 
       // A_NLP
       dtmp = 10 * (float)log10(aec->nearlevel.averagelevel /
-                                   (2 * aec->linoutlevel.averagelevel) +
-                               1e-10f);
+          aec->linoutlevel.averagelevel + 1e-10f);
 
       // subtract noise power
-      suppressedEcho = 2 * (aec->linoutlevel.averagelevel -
-                            safety * aec->linoutlevel.minlevel);
+      suppressedEcho = aec->linoutlevel.averagelevel -
+          safety * aec->linoutlevel.minlevel;
 
       dtmp2 = 10 * (float)log10(echo / suppressedEcho + 1e-10f);
 
@@ -811,18 +750,22 @@ static void UpdateDelayMetrics(AecCore* self) {
   for (i = 0; i < kHistorySizeBlocks; i++) {
     l1_norm += abs(i - median) * self->delay_histogram[i];
   }
-  self->delay_std = (int)((l1_norm + self->num_delay_values / 2) /
-      self->num_delay_values) * kMsPerBlock;
+  self->delay_std =
+      (int)((l1_norm + self->num_delay_values / 2) / self->num_delay_values) *
+      kMsPerBlock;
 
   // Determine fraction of delays that are out of bounds, that is, either
   // negative (anti-causal system) or larger than the AEC filter length.
   {
     int num_delays_out_of_bounds = self->num_delay_values;
+    const int histogram_length =
+        sizeof(self->delay_histogram) / sizeof(self->delay_histogram[0]);
     for (i = lookahead; i < lookahead + self->num_partitions; ++i) {
-      num_delays_out_of_bounds -= self->delay_histogram[i];
+      if (i < histogram_length)
+        num_delays_out_of_bounds -= self->delay_histogram[i];
     }
-    self->fraction_poor_delays = (float)num_delays_out_of_bounds /
-        self->num_delay_values;
+    self->fraction_poor_delays =
+        (float)num_delays_out_of_bounds / self->num_delay_values;
   }
 
   // Reset histogram.
@@ -832,21 +775,27 @@ static void UpdateDelayMetrics(AecCore* self) {
   return;
 }
 
-static void TimeToFrequency(float time_data[PART_LEN2],
-                            float freq_data[2][PART_LEN1],
-                            int window) {
-  int i = 0;
-
-  // TODO(bjornv): Should we have a different function/wrapper for windowed FFT?
-  if (window) {
-    for (i = 0; i < PART_LEN; i++) {
-      time_data[i] *= WebRtcAec_sqrtHanning[i];
-      time_data[PART_LEN + i] *= WebRtcAec_sqrtHanning[PART_LEN - i];
-    }
+static void ScaledInverseFft(float freq_data[2][PART_LEN1],
+                             float time_data[PART_LEN2],
+                             float scale,
+                             int conjugate) {
+  int i;
+  const float normalization = scale / ((float)PART_LEN2);
+  const float sign = (conjugate ? -1 : 1);
+  time_data[0] = freq_data[0][0] * normalization;
+  time_data[1] = freq_data[0][PART_LEN] * normalization;
+  for (i = 1; i < PART_LEN; i++) {
+    time_data[2 * i] = freq_data[0][i] * normalization;
+    time_data[2 * i + 1] = sign * freq_data[1][i] * normalization;
   }
+  aec_rdft_inverse_128(time_data);
+}
 
+static void Fft(float time_data[PART_LEN2], float freq_data[2][PART_LEN1]) {
+  int i;
   aec_rdft_forward_128(time_data);
-  // Reorder.
+
+  // Reorder fft output data.
   freq_data[1][0] = 0;
   freq_data[1][PART_LEN] = 0;
   freq_data[0][0] = time_data[0];
@@ -855,14 +804,6 @@ static void TimeToFrequency(float time_data[PART_LEN2],
     freq_data[0][i] = time_data[2 * i];
     freq_data[1][i] = time_data[2 * i + 1];
   }
-}
-
-static int MoveFarReadPtrWithoutSystemDelayUpdate(AecCore* self, int elements) {
-  WebRtc_MoveReadPtr(self->far_buf_windowed, elements);
-#ifdef WEBRTC_AEC_DEBUG_DUMP
-  WebRtc_MoveReadPtr(self->far_time_buf, elements);
-#endif
-  return WebRtc_MoveReadPtr(self->far_buf, elements);
 }
 
 static int SignalBasedDelayCorrection(AecCore* self) {
@@ -891,10 +832,9 @@ static int SignalBasedDelayCorrection(AecCore* self) {
   // 4. Finally, verify that the proposed |delay_correction| is feasible by
   //    comparing with the size of the far-end buffer.
   last_delay = WebRtc_last_delay(self->delay_estimator);
-  if ((last_delay >= 0) &&
-      (last_delay != self->previous_delay) &&
+  if ((last_delay >= 0) && (last_delay != self->previous_delay) &&
       (WebRtc_last_delay_quality(self->delay_estimator) >
-           self->delay_quality_threshold)) {
+       self->delay_quality_threshold)) {
     int delay = last_delay - WebRtc_lookahead(self->delay_estimator);
     // Allow for a slack in the actual delay, defined by a |lower_bound| and an
     // |upper_bound|.  The adaptive echo cancellation filter is currently
@@ -904,7 +844,7 @@ static int SignalBasedDelayCorrection(AecCore* self) {
     const int upper_bound = self->num_partitions * 3 / 4;
     const int do_correction = delay <= lower_bound || delay > upper_bound;
     if (do_correction == 1) {
-      int available_read = (int)WebRtc_available_read(self->far_buf);
+      int available_read = (int)WebRtc_available_read(self->far_time_buf);
       // With |shift_offset| we gradually rely on the delay estimates.  For
       // positive delays we reduce the correction by |shift_offset| to lower the
       // risk of pushing the AEC into a non causal state.  For negative delays
@@ -928,22 +868,99 @@ static int SignalBasedDelayCorrection(AecCore* self) {
   // correction.
   if (self->delay_correction_count > 0) {
     float delay_quality = WebRtc_last_delay_quality(self->delay_estimator);
-    delay_quality = (delay_quality > kDelayQualityThresholdMax ?
-        kDelayQualityThresholdMax : delay_quality);
+    delay_quality =
+        (delay_quality > kDelayQualityThresholdMax ? kDelayQualityThresholdMax
+                                                   : delay_quality);
     self->delay_quality_threshold =
-        (delay_quality > self->delay_quality_threshold ? delay_quality :
-            self->delay_quality_threshold);
+        (delay_quality > self->delay_quality_threshold
+             ? delay_quality
+             : self->delay_quality_threshold);
   }
   return delay_correction;
 }
 
-static void NonLinearProcessing(AecCore* aec,
-                                float* output,
-                                float* const* outputH) {
-  float efw[2][PART_LEN1], xfw[2][PART_LEN1];
-  complex_t comfortNoiseHband[PART_LEN1];
+static void EchoSubtraction(AecCore* aec,
+                            int num_partitions,
+                            int extended_filter_enabled,
+                            float normal_mu,
+                            float normal_error_threshold,
+                            float* x_fft,
+                            int* x_fft_buf_block_pos,
+                            float x_fft_buf[2]
+                                           [kExtendedNumPartitions * PART_LEN1],
+                            float* const y,
+                            float x_pow[PART_LEN1],
+                            float h_fft_buf[2]
+                                           [kExtendedNumPartitions * PART_LEN1],
+                            float echo_subtractor_output[PART_LEN]) {
+  float s_fft[2][PART_LEN1];
+  float e_extended[PART_LEN2];
+  float s_extended[PART_LEN2];
+  float* s;
+  float e[PART_LEN];
+  float e_fft[2][PART_LEN1];
+  int i;
+
+  // Update the x_fft_buf block position.
+  (*x_fft_buf_block_pos)--;
+  if ((*x_fft_buf_block_pos) == -1) {
+    *x_fft_buf_block_pos = num_partitions - 1;
+  }
+
+  // Buffer x_fft.
+  memcpy(x_fft_buf[0] + (*x_fft_buf_block_pos) * PART_LEN1, x_fft,
+         sizeof(float) * PART_LEN1);
+  memcpy(x_fft_buf[1] + (*x_fft_buf_block_pos) * PART_LEN1, &x_fft[PART_LEN1],
+         sizeof(float) * PART_LEN1);
+
+  memset(s_fft, 0, sizeof(s_fft));
+
+  // Conditionally reset the echo subtraction filter if the filter has diverged
+  // significantly.
+  if (!aec->extended_filter_enabled && aec->extreme_filter_divergence) {
+    memset(aec->wfBuf, 0, sizeof(aec->wfBuf));
+    aec->extreme_filter_divergence = 0;
+  }
+
+  // Produce echo estimate s_fft.
+  WebRtcAec_FilterFar(num_partitions, *x_fft_buf_block_pos, x_fft_buf,
+                      h_fft_buf, s_fft);
+
+  // Compute the time-domain echo estimate s.
+  ScaledInverseFft(s_fft, s_extended, 2.0f, 0);
+  s = &s_extended[PART_LEN];
+
+  // Compute the time-domain echo prediction error.
+  for (i = 0; i < PART_LEN; ++i) {
+    e[i] = y[i] - s[i];
+  }
+
+  // Compute the frequency domain echo prediction error.
+  memset(e_extended, 0, sizeof(float) * PART_LEN);
+  memcpy(e_extended + PART_LEN, e, sizeof(float) * PART_LEN);
+  Fft(e_extended, e_fft);
+
+  RTC_AEC_DEBUG_RAW_WRITE(aec->e_fft_file, &e_fft[0][0],
+                          sizeof(e_fft[0][0]) * PART_LEN1 * 2);
+
+  // Scale error signal inversely with far power.
+  WebRtcAec_ScaleErrorSignal(extended_filter_enabled, normal_mu,
+                             normal_error_threshold, x_pow, e_fft);
+  WebRtcAec_FilterAdaptation(num_partitions, *x_fft_buf_block_pos, x_fft_buf,
+                             e_fft, h_fft_buf);
+  memcpy(echo_subtractor_output, e, sizeof(float) * PART_LEN);
+}
+
+static void EchoSuppression(AecCore* aec,
+                            float farend[PART_LEN2],
+                            float* echo_subtractor_output,
+                            float* output,
+                            float* const* outputH) {
+  float efw[2][PART_LEN1];
+  float xfw[2][PART_LEN1];
+  float dfw[2][PART_LEN1];
+  float comfortNoiseHband[2][PART_LEN1];
   float fft[PART_LEN2];
-  float scale, dtmp;
   float nlpGainHband;
   int i;
   size_t j;
@@ -967,27 +984,49 @@ static void NonLinearProcessing(AecCore* aec,
 
   float* xfw_ptr = NULL;
 
-  aec->delayEstCtr++;
-  if (aec->delayEstCtr == delayEstInterval) {
-    aec->delayEstCtr = 0;
-  }
+  // Update eBuf with echo subtractor output.
+  memcpy(aec->eBuf + PART_LEN, echo_subtractor_output,
+         sizeof(float) * PART_LEN);
 
-  // initialize comfort noise for H band
-  memset(comfortNoiseHband, 0, sizeof(comfortNoiseHband));
-  nlpGainHband = (float)0.0;
-  dtmp = (float)0.0;
+  // Analysis filter banks for the echo suppressor.
+  // Windowed near-end ffts.
+  WindowData(fft, aec->dBuf);
+  aec_rdft_forward_128(fft);
+  StoreAsComplex(fft, dfw);
 
-  // We should always have at least one element stored in |far_buf|.
-  assert(WebRtc_available_read(aec->far_buf_windowed) > 0);
+  // Windowed echo suppressor output ffts.
+  WindowData(fft, aec->eBuf);
+  aec_rdft_forward_128(fft);
+  StoreAsComplex(fft, efw);
+
   // NLP
-  WebRtc_ReadBuffer(aec->far_buf_windowed, (void**)&xfw_ptr, &xfw[0][0], 1);
 
-  // TODO(bjornv): Investigate if we can reuse |far_buf_windowed| instead of
-  // |xfwBuf|.
+  // Convert far-end partition to the frequency domain with windowing.
+  WindowData(fft, farend);
+  Fft(fft, xfw);
+  xfw_ptr = &xfw[0][0];
+
   // Buffer far.
   memcpy(aec->xfwBuf, xfw_ptr, sizeof(float) * 2 * PART_LEN1);
 
-  WebRtcAec_SubbandCoherence(aec, efw, xfw, fft, cohde, cohxd);
+  aec->delayEstCtr++;
+  if (aec->delayEstCtr == delayEstInterval) {
+    aec->delayEstCtr = 0;
+    aec->delayIdx = WebRtcAec_PartitionDelay(aec);
+  }
+
+  // Use delayed far.
+  memcpy(xfw, aec->xfwBuf + aec->delayIdx * PART_LEN1,
+         sizeof(xfw[0][0]) * 2 * PART_LEN1);
+
+  WebRtcAec_SubbandCoherence(aec, efw, dfw, xfw, fft, cohde, cohxd,
+                             &aec->extreme_filter_divergence);
+
+  // Select the microphone signal as output if the filter is deemed to have
+  // diverged.
+  if (aec->divergeState) {
+    memcpy(efw, dfw, sizeof(efw[0][0]) * 2 * PART_LEN1);
+  }
 
   hNlXdAvg = 0;
   for (i = minPrefBand; i < prefBandSize + minPrefBand; i++) {
@@ -1028,7 +1067,6 @@ static void NonLinearProcessing(AecCore* aec,
       hNlFbLow = hNlXdAvg;
     }
   } else {
-
     if (aec->stNearState == 1) {
       aec->echoState = 0;
       memcpy(hNl, cohde, sizeof(hNl));
@@ -1084,6 +1122,9 @@ static void NonLinearProcessing(AecCore* aec,
   // Add comfort noise.
   WebRtcAec_ComfortNoise(aec, efw, comfortNoiseHband, aec->noisePow, hNl);
 
+  // Inverse error fft.
+  ScaledInverseFft(efw, fft, 2.0f, 1);
+
   // TODO(bjornv): Investigate how to take the windowing below into account if
   // needed.
   if (aec->metricsMode == 1) {
@@ -1091,67 +1132,47 @@ static void NonLinearProcessing(AecCore* aec,
     // In addition the time domain signal is windowed before transformation,
     // losing half the energy on the average. We take care of the first
     // scaling only in UpdateMetrics().
-    UpdateLevel(&aec->nlpoutlevel, efw);
+    UpdateLevel(&aec->nlpoutlevel, CalculatePower(fft, PART_LEN2));
   }
-  // Inverse error fft.
-  fft[0] = efw[0][0];
-  fft[1] = efw[0][PART_LEN];
-  for (i = 1; i < PART_LEN; i++) {
-    fft[2 * i] = efw[0][i];
-    // Sign change required by Ooura fft.
-    fft[2 * i + 1] = -efw[1][i];
-  }
-  aec_rdft_inverse_128(fft);
 
   // Overlap and add to obtain output.
-  scale = 2.0f / PART_LEN2;
   for (i = 0; i < PART_LEN; i++) {
-    fft[i] *= scale;  // fft scaling
-    fft[i] = fft[i] * WebRtcAec_sqrtHanning[i] + aec->outBuf[i];
-
-    fft[PART_LEN + i] *= scale;  // fft scaling
-    aec->outBuf[i] = fft[PART_LEN + i] * WebRtcAec_sqrtHanning[PART_LEN - i];
+    output[i] = (fft[i] * WebRtcAec_sqrtHanning[i] +
+                 aec->outBuf[i] * WebRtcAec_sqrtHanning[PART_LEN - i]);
 
     // Saturate output to keep it in the allowed range.
-    output[i] = WEBRTC_SPL_SAT(
-        WEBRTC_SPL_WORD16_MAX, fft[i], WEBRTC_SPL_WORD16_MIN);
+    output[i] =
+        WEBRTC_SPL_SAT(WEBRTC_SPL_WORD16_MAX, output[i], WEBRTC_SPL_WORD16_MIN);
   }
+  memcpy(aec->outBuf, &fft[PART_LEN], PART_LEN * sizeof(aec->outBuf[0]));
 
   // For H band
   if (aec->num_bands > 1) {
-
     // H band gain
     // average nlp over low band: average over second half of freq spectrum
     // (4->8khz)
     GetHighbandGain(hNl, &nlpGainHband);
 
     // Inverse comfort_noise
-    if (flagHbandCn == 1) {
-      fft[0] = comfortNoiseHband[0][0];
-      fft[1] = comfortNoiseHband[PART_LEN][0];
-      for (i = 1; i < PART_LEN; i++) {
-        fft[2 * i] = comfortNoiseHband[i][0];
-        fft[2 * i + 1] = comfortNoiseHband[i][1];
-      }
-      aec_rdft_inverse_128(fft);
-      scale = 2.0f / PART_LEN2;
-    }
+    ScaledInverseFft(comfortNoiseHband, fft, 2.0f, 0);
 
     // compute gain factor
     for (j = 0; j < aec->num_bands - 1; ++j) {
       for (i = 0; i < PART_LEN; i++) {
-        dtmp = aec->dBufH[j][i];
-        dtmp = dtmp * nlpGainHband;  // for variable gain
+        outputH[j][i] = aec->dBufH[j][i] * nlpGainHband;
+      }
+    }
 
-        // add some comfort noise where Hband is attenuated
-        if (flagHbandCn == 1 && j == 0) {
-          fft[i] *= scale;  // fft scaling
-          dtmp += cnScaleHband * fft[i];
-        }
+    // Add some comfort noise where Hband is attenuated.
+    for (i = 0; i < PART_LEN; i++) {
+      outputH[0][i] += cnScaleHband * fft[i];
+    }
 
-        // Saturate output to keep it in the allowed range.
-        outputH[j][i] = WEBRTC_SPL_SAT(
-            WEBRTC_SPL_WORD16_MAX, dtmp, WEBRTC_SPL_WORD16_MIN);
+    // Saturate output to keep it in the allowed range.
+    for (j = 0; j < aec->num_bands - 1; ++j) {
+      for (i = 0; i < PART_LEN; i++) {
+        outputH[j][i] = WEBRTC_SPL_SAT(WEBRTC_SPL_WORD16_MAX, outputH[j][i],
+                                       WEBRTC_SPL_WORD16_MIN);
       }
     }
   }
@@ -1165,18 +1186,15 @@ static void NonLinearProcessing(AecCore* aec,
     memcpy(aec->dBufH[j], aec->dBufH[j] + PART_LEN, sizeof(float) * PART_LEN);
   }
 
-  memmove(aec->xfwBuf + PART_LEN1,
-          aec->xfwBuf,
+  memmove(aec->xfwBuf + PART_LEN1, aec->xfwBuf,
           sizeof(aec->xfwBuf) - sizeof(complex_t) * PART_LEN1);
 }
 
 static void ProcessBlock(AecCore* aec) {
   size_t i;
-  float y[PART_LEN], e[PART_LEN];
-  float scale;
 
   float fft[PART_LEN2];
-  float xf[2][PART_LEN1], yf[2][PART_LEN1], ef[2][PART_LEN1];
+  float x_fft[2][PART_LEN1];
   float df[2][PART_LEN1];
   float far_spectrum = 0.0f;
   float near_spectrum = 0.0f;
@@ -1193,50 +1211,61 @@ static void ProcessBlock(AecCore* aec) {
 
   float nearend[PART_LEN];
   float* nearend_ptr = NULL;
+  float farend[PART_LEN2];
+  float* farend_ptr = NULL;
+  float echo_subtractor_output[PART_LEN];
   float output[PART_LEN];
   float outputH[NUM_HIGH_BANDS_MAX][PART_LEN];
   float* outputH_ptr[NUM_HIGH_BANDS_MAX];
+  float* x_fft_ptr = NULL;
+
   for (i = 0; i < NUM_HIGH_BANDS_MAX; ++i) {
     outputH_ptr[i] = outputH[i];
   }
 
-  float* xf_ptr = NULL;
-
   // Concatenate old and new nearend blocks.
   for (i = 0; i < aec->num_bands - 1; ++i) {
-    WebRtc_ReadBuffer(aec->nearFrBufH[i],
-                      (void**)&nearend_ptr,
-                      nearend,
+    WebRtc_ReadBuffer(aec->nearFrBufH[i], (void**)&nearend_ptr, nearend,
                       PART_LEN);
     memcpy(aec->dBufH[i] + PART_LEN, nearend_ptr, sizeof(nearend));
   }
   WebRtc_ReadBuffer(aec->nearFrBuf, (void**)&nearend_ptr, nearend, PART_LEN);
   memcpy(aec->dBuf + PART_LEN, nearend_ptr, sizeof(nearend));
 
-  // ---------- Ooura fft ----------
+  // We should always have at least one element stored in |far_buf|.
+  assert(WebRtc_available_read(aec->far_time_buf) > 0);
+  WebRtc_ReadBuffer(aec->far_time_buf, (void**)&farend_ptr, farend, 1);
 
 #ifdef WEBRTC_AEC_DEBUG_DUMP
   {
-    float farend[PART_LEN];
-    float* farend_ptr = NULL;
-    WebRtc_ReadBuffer(aec->far_time_buf, (void**)&farend_ptr, farend, 1);
-    rtc_WavWriteSamples(aec->farFile, farend_ptr, PART_LEN);
-    rtc_WavWriteSamples(aec->nearFile, nearend_ptr, PART_LEN);
+    // TODO(minyue): |farend_ptr| starts from buffered samples. This will be
+    // modified when |aec->far_time_buf| is revised.
+    RTC_AEC_DEBUG_WAV_WRITE(aec->farFile, &farend_ptr[PART_LEN], PART_LEN);
+
+    RTC_AEC_DEBUG_WAV_WRITE(aec->nearFile, nearend_ptr, PART_LEN);
   }
 #endif
 
-  // We should always have at least one element stored in |far_buf|.
-  assert(WebRtc_available_read(aec->far_buf) > 0);
-  WebRtc_ReadBuffer(aec->far_buf, (void**)&xf_ptr, &xf[0][0], 1);
+  if (aec->metricsMode == 1) {
+    // Update power levels
+    UpdateLevel(&aec->farlevel,
+                CalculatePower(&farend_ptr[PART_LEN], PART_LEN));
+    UpdateLevel(&aec->nearlevel, CalculatePower(nearend_ptr, PART_LEN));
+  }
+
+  // Convert far-end signal to the frequency domain.
+  memcpy(fft, farend_ptr, sizeof(float) * PART_LEN2);
+  Fft(fft, x_fft);
+  x_fft_ptr = &x_fft[0][0];
 
   // Near fft
   memcpy(fft, aec->dBuf, sizeof(float) * PART_LEN2);
-  TimeToFrequency(fft, df, 0);
+  Fft(fft, df);
 
   // Power smoothing
   for (i = 0; i < PART_LEN1; i++) {
-    far_spectrum = (xf_ptr[i] * xf_ptr[i]) +
-                   (xf_ptr[PART_LEN1 + i] * xf_ptr[PART_LEN1 + i]);
+    far_spectrum = (x_fft_ptr[i] * x_fft_ptr[i]) +
+                   (x_fft_ptr[PART_LEN1 + i] * x_fft_ptr[PART_LEN1 + i]);
     aec->xPow[i] =
         gPow[0] * aec->xPow[i] + gPow[1] * aec->num_partitions * far_spectrum;
     // Calculate absolute spectra
@@ -1279,8 +1308,8 @@ static void ProcessBlock(AecCore* aec) {
 
   // Block wise delay estimation used for logging
   if (aec->delay_logging_enabled) {
-    if (WebRtc_AddFarSpectrumFloat(
-            aec->delay_estimator_farend, abs_far_spectrum, PART_LEN1) == 0) {
+    if (WebRtc_AddFarSpectrumFloat(aec->delay_estimator_farend,
+                                   abs_far_spectrum, PART_LEN1) == 0) {
       int delay_estimate = WebRtc_DelayEstimatorProcessFloat(
           aec->delay_estimator, abs_near_spectrum, PART_LEN1);
       if (delay_estimate >= 0) {
@@ -1295,75 +1324,23 @@ static void ProcessBlock(AecCore* aec) {
     }
   }
 
-  // Update the xfBuf block position.
-  aec->xfBufBlockPos--;
-  if (aec->xfBufBlockPos == -1) {
-    aec->xfBufBlockPos = aec->num_partitions - 1;
-  }
+  // Perform echo subtraction.
+  EchoSubtraction(aec, aec->num_partitions, aec->extended_filter_enabled,
+                  aec->normal_mu, aec->normal_error_threshold, &x_fft[0][0],
+                  &aec->xfBufBlockPos, aec->xfBuf, nearend_ptr, aec->xPow,
+                  aec->wfBuf, echo_subtractor_output);
 
-  // Buffer xf
-  memcpy(aec->xfBuf[0] + aec->xfBufBlockPos * PART_LEN1,
-         xf_ptr,
-         sizeof(float) * PART_LEN1);
-  memcpy(aec->xfBuf[1] + aec->xfBufBlockPos * PART_LEN1,
-         &xf_ptr[PART_LEN1],
-         sizeof(float) * PART_LEN1);
-
-  memset(yf, 0, sizeof(yf));
-
-  // Filter far
-  WebRtcAec_FilterFar(aec, yf);
-
-  // Inverse fft to obtain echo estimate and error.
-  fft[0] = yf[0][0];
-  fft[1] = yf[0][PART_LEN];
-  for (i = 1; i < PART_LEN; i++) {
-    fft[2 * i] = yf[0][i];
-    fft[2 * i + 1] = yf[1][i];
-  }
-  aec_rdft_inverse_128(fft);
-
-  scale = 2.0f / PART_LEN2;
-  for (i = 0; i < PART_LEN; i++) {
-    y[i] = fft[PART_LEN + i] * scale;  // fft scaling
-  }
-
-  for (i = 0; i < PART_LEN; i++) {
-    e[i] = nearend_ptr[i] - y[i];
-  }
-
-  // Error fft
-  memcpy(aec->eBuf + PART_LEN, e, sizeof(float) * PART_LEN);
-  memset(fft, 0, sizeof(float) * PART_LEN);
-  memcpy(fft + PART_LEN, e, sizeof(float) * PART_LEN);
-  // TODO(bjornv): Change to use TimeToFrequency().
-  aec_rdft_forward_128(fft);
-
-  ef[1][0] = 0;
-  ef[1][PART_LEN] = 0;
-  ef[0][0] = fft[0];
-  ef[0][PART_LEN] = fft[1];
-  for (i = 1; i < PART_LEN; i++) {
-    ef[0][i] = fft[2 * i];
-    ef[1][i] = fft[2 * i + 1];
-  }
+  RTC_AEC_DEBUG_WAV_WRITE(aec->outLinearFile, echo_subtractor_output, PART_LEN);
 
   if (aec->metricsMode == 1) {
-    // Note that the first PART_LEN samples in fft (before transformation) are
-    // zero. Hence, the scaling by two in UpdateLevel() should not be
-    // performed. That scaling is taken care of in UpdateMetrics() instead.
-    UpdateLevel(&aec->linoutlevel, ef);
+    UpdateLevel(&aec->linoutlevel,
+                CalculatePower(echo_subtractor_output, PART_LEN));
   }
 
-  // Scale error signal inversely with far power.
-  WebRtcAec_ScaleErrorSignal(aec, ef);
-  WebRtcAec_FilterAdaptation(aec, fft, ef);
-  NonLinearProcessing(aec, output, outputH_ptr);
+  // Perform echo suppression.
+  EchoSuppression(aec, farend_ptr, echo_subtractor_output, output, outputH_ptr);
 
   if (aec->metricsMode == 1) {
-    // Update power levels and echo metrics
-    UpdateLevel(&aec->farlevel, (float(*)[PART_LEN1])xf_ptr);
-    UpdateLevel(&aec->nearlevel, df);
     UpdateMetrics(aec);
   }
 
@@ -1374,10 +1351,7 @@ static void ProcessBlock(AecCore* aec) {
     WebRtc_WriteBuffer(aec->outFrBufH[i], outputH[i], PART_LEN);
   }
 
-#ifdef WEBRTC_AEC_DEBUG_DUMP
-  rtc_WavWriteSamples(aec->outLinearFile, e, PART_LEN);
-  rtc_WavWriteSamples(aec->outFile, output, PART_LEN);
-#endif
+  RTC_AEC_DEBUG_WAV_WRITE(aec->outFile, output, PART_LEN);
 }
 
 AecCore* WebRtcAec_CreateAec() {
@@ -1400,14 +1374,14 @@ AecCore* WebRtcAec_CreateAec() {
   }
 
   for (i = 0; i < NUM_HIGH_BANDS_MAX; ++i) {
-    aec->nearFrBufH[i] = WebRtc_CreateBuffer(FRAME_LEN + PART_LEN,
-                                             sizeof(float));
+    aec->nearFrBufH[i] =
+        WebRtc_CreateBuffer(FRAME_LEN + PART_LEN, sizeof(float));
     if (!aec->nearFrBufH[i]) {
       WebRtcAec_FreeAec(aec);
       return NULL;
     }
-    aec->outFrBufH[i] = WebRtc_CreateBuffer(FRAME_LEN + PART_LEN,
-                                            sizeof(float));
+    aec->outFrBufH[i] =
+        WebRtc_CreateBuffer(FRAME_LEN + PART_LEN, sizeof(float));
     if (!aec->outFrBufH[i]) {
       WebRtcAec_FreeAec(aec);
       return NULL;
@@ -1415,26 +1389,20 @@ AecCore* WebRtcAec_CreateAec() {
   }
 
   // Create far-end buffers.
-  aec->far_buf =
-      WebRtc_CreateBuffer(kBufSizePartitions, sizeof(float) * 2 * PART_LEN1);
-  if (!aec->far_buf) {
-    WebRtcAec_FreeAec(aec);
-    return NULL;
-  }
-  aec->far_buf_windowed =
-      WebRtc_CreateBuffer(kBufSizePartitions, sizeof(float) * 2 * PART_LEN1);
-  if (!aec->far_buf_windowed) {
-    WebRtcAec_FreeAec(aec);
-    return NULL;
-  }
-#ifdef WEBRTC_AEC_DEBUG_DUMP
-  aec->instance_index = webrtc_aec_instance_count;
+  // For bit exactness with legacy code, each element in |far_time_buf| is
+  // supposed to contain |PART_LEN2| samples with an overlap of |PART_LEN|
+  // samples from the last frame.
+  // TODO(minyue): reduce |far_time_buf| to non-overlapped |PART_LEN| samples.
   aec->far_time_buf =
-      WebRtc_CreateBuffer(kBufSizePartitions, sizeof(float) * PART_LEN);
+      WebRtc_CreateBuffer(kBufSizePartitions, sizeof(float) * PART_LEN2);
   if (!aec->far_time_buf) {
     WebRtcAec_FreeAec(aec);
     return NULL;
   }
+
+#ifdef WEBRTC_AEC_DEBUG_DUMP
+  aec->instance_index = webrtc_aec_instance_count;
+
   aec->farFile = aec->nearFile = aec->outFile = aec->outLinearFile = NULL;
   aec->debug_dump_count = 0;
 #endif
@@ -1470,6 +1438,9 @@ AecCore* WebRtcAec_CreateAec() {
   WebRtcAec_OverdriveAndSuppress = OverdriveAndSuppress;
   WebRtcAec_ComfortNoise = ComfortNoise;
   WebRtcAec_SubbandCoherence = SubbandCoherence;
+  WebRtcAec_StoreAsComplex = StoreAsComplex;
+  WebRtcAec_PartitionDelay = PartitionDelay;
+  WebRtcAec_WindowData = WindowData;
 
 #if defined(WEBRTC_ARCH_X86_FAMILY)
   if (WebRtc_GetCPUInfo(kSSE2)) {
@@ -1508,43 +1479,19 @@ void WebRtcAec_FreeAec(AecCore* aec) {
     WebRtc_FreeBuffer(aec->outFrBufH[i]);
   }
 
-  WebRtc_FreeBuffer(aec->far_buf);
-  WebRtc_FreeBuffer(aec->far_buf_windowed);
-#ifdef WEBRTC_AEC_DEBUG_DUMP
   WebRtc_FreeBuffer(aec->far_time_buf);
-  rtc_WavClose(aec->farFile);
-  rtc_WavClose(aec->nearFile);
-  rtc_WavClose(aec->outFile);
-  rtc_WavClose(aec->outLinearFile);
-#endif
+
+  RTC_AEC_DEBUG_WAV_CLOSE(aec->farFile);
+  RTC_AEC_DEBUG_WAV_CLOSE(aec->nearFile);
+  RTC_AEC_DEBUG_WAV_CLOSE(aec->outFile);
+  RTC_AEC_DEBUG_WAV_CLOSE(aec->outLinearFile);
+  RTC_AEC_DEBUG_RAW_CLOSE(aec->e_fft_file);
+
   WebRtc_FreeDelayEstimator(aec->delay_estimator);
   WebRtc_FreeDelayEstimatorFarend(aec->delay_estimator_farend);
 
   free(aec);
 }
-
-#ifdef WEBRTC_AEC_DEBUG_DUMP
-// Open a new Wav file for writing. If it was already open with a different
-// sample frequency, close it first.
-static void ReopenWav(rtc_WavWriter** wav_file,
-                      const char* name,
-                      int seq1,
-                      int seq2,
-                      int sample_rate) {
-  int written ATTRIBUTE_UNUSED;
-  char filename[64];
-  if (*wav_file) {
-    if (rtc_WavSampleRate(*wav_file) == sample_rate)
-      return;
-    rtc_WavClose(*wav_file);
-  }
-  written = snprintf(filename, sizeof(filename), "%s%d-%d.wav",
-                     name, seq1, seq2);
-  assert(written >= 0);  // no output error
-  assert((size_t)written < sizeof(filename));  // buffer was large enough
-  *wav_file = rtc_WavOpen(filename, sample_rate, 1);
-}
-#endif  // WEBRTC_AEC_DEBUG_DUMP
 
 int WebRtcAec_InitAec(AecCore* aec, int sampFreq) {
   int i;
@@ -1569,21 +1516,27 @@ int WebRtcAec_InitAec(AecCore* aec, int sampFreq) {
   }
 
   // Initialize far-end buffers.
-  WebRtc_InitBuffer(aec->far_buf);
-  WebRtc_InitBuffer(aec->far_buf_windowed);
-#ifdef WEBRTC_AEC_DEBUG_DUMP
   WebRtc_InitBuffer(aec->far_time_buf);
+
+#ifdef WEBRTC_AEC_DEBUG_DUMP
   {
     int process_rate = sampFreq > 16000 ? 16000 : sampFreq;
-    ReopenWav(&aec->farFile, "aec_far",
-              aec->instance_index, aec->debug_dump_count, process_rate);
-    ReopenWav(&aec->nearFile, "aec_near",
-              aec->instance_index, aec->debug_dump_count, process_rate);
-    ReopenWav(&aec->outFile, "aec_out",
-              aec->instance_index, aec->debug_dump_count, process_rate);
-    ReopenWav(&aec->outLinearFile, "aec_out_linear",
-              aec->instance_index, aec->debug_dump_count, process_rate);
+    RTC_AEC_DEBUG_WAV_REOPEN("aec_far", aec->instance_index,
+                             aec->debug_dump_count, process_rate,
+                             &aec->farFile);
+    RTC_AEC_DEBUG_WAV_REOPEN("aec_near", aec->instance_index,
+                             aec->debug_dump_count, process_rate,
+                             &aec->nearFile);
+    RTC_AEC_DEBUG_WAV_REOPEN("aec_out", aec->instance_index,
+                             aec->debug_dump_count, process_rate,
+                             &aec->outFile);
+    RTC_AEC_DEBUG_WAV_REOPEN("aec_out_linear", aec->instance_index,
+                             aec->debug_dump_count, process_rate,
+                             &aec->outLinearFile);
   }
+
+  RTC_AEC_DEBUG_RAW_OPEN("aec_e_fft", aec->debug_dump_count, &aec->e_fft_file);
+
   ++aec->debug_dump_count;
 #endif
   aec->system_delay = 0;
@@ -1668,8 +1621,8 @@ int WebRtcAec_InitAec(AecCore* aec, int sampFreq) {
   memset(aec->wfBuf, 0, sizeof(complex_t) * kExtendedNumPartitions * PART_LEN1);
   memset(aec->sde, 0, sizeof(complex_t) * PART_LEN1);
   memset(aec->sxd, 0, sizeof(complex_t) * PART_LEN1);
-  memset(
-      aec->xfwBuf, 0, sizeof(complex_t) * kExtendedNumPartitions * PART_LEN1);
+  memset(aec->xfwBuf, 0,
+         sizeof(complex_t) * kExtendedNumPartitions * PART_LEN1);
   memset(aec->se, 0, sizeof(float) * PART_LEN1);
 
   // To prevent numerical instability in the first block.
@@ -1698,6 +1651,8 @@ int WebRtcAec_InitAec(AecCore* aec, int sampFreq) {
   aec->seed = 777;
   aec->delayEstCtr = 0;
 
+  aec->extreme_filter_divergence = 0;
+
   // Metrics disabled by default
   aec->metricsMode = 0;
   InitMetrics(aec);
@@ -1705,27 +1660,21 @@ int WebRtcAec_InitAec(AecCore* aec, int sampFreq) {
   return 0;
 }
 
+// For bit exactness with a legacy code, |farend| is supposed to contain
+// |PART_LEN2| samples with an overlap of |PART_LEN| samples from the last
+// frame.
+// TODO(minyue): reduce |farend| to non-overlapped |PART_LEN| samples.
 void WebRtcAec_BufferFarendPartition(AecCore* aec, const float* farend) {
-  float fft[PART_LEN2];
-  float xf[2][PART_LEN1];
-
   // Check if the buffer is full, and in that case flush the oldest data.
-  if (WebRtc_available_write(aec->far_buf) < 1) {
+  if (WebRtc_available_write(aec->far_time_buf) < 1) {
     WebRtcAec_MoveFarReadPtr(aec, 1);
   }
-  // Convert far-end partition to the frequency domain without windowing.
-  memcpy(fft, farend, sizeof(float) * PART_LEN2);
-  TimeToFrequency(fft, xf, 0);
-  WebRtc_WriteBuffer(aec->far_buf, &xf[0][0], 1);
 
-  // Convert far-end partition to the frequency domain with windowing.
-  memcpy(fft, farend, sizeof(float) * PART_LEN2);
-  TimeToFrequency(fft, xf, 1);
-  WebRtc_WriteBuffer(aec->far_buf_windowed, &xf[0][0], 1);
+  WebRtc_WriteBuffer(aec->far_time_buf, farend, 1);
 }
 
 int WebRtcAec_MoveFarReadPtr(AecCore* aec, int elements) {
-  int elements_moved = MoveFarReadPtrWithoutSystemDelayUpdate(aec, elements);
+  int elements_moved = WebRtc_MoveReadPtr(aec->far_time_buf, elements);
   aec->system_delay -= elements_moved * PART_LEN;
   return elements_moved;
 }
@@ -1769,7 +1718,7 @@ void WebRtcAec_ProcessFrames(AecCore* aec,
 
   assert(aec->num_bands == num_bands);
 
-  for (j = 0; j < num_samples; j+= FRAME_LEN) {
+  for (j = 0; j < num_samples; j += FRAME_LEN) {
     // TODO(bjornv): Change the near-end buffer handling to be the same as for
     // far-end, that is, with a near_pre_buf.
     // Buffer the near-end frame.
@@ -1798,15 +1747,14 @@ void WebRtcAec_ProcessFrames(AecCore* aec,
       // which should be investigated. Maybe, allow for a non-symmetric
       // rounding, like -16.
       int move_elements = (aec->knownDelay - knownDelay - 32) / PART_LEN;
-      int moved_elements =
-          MoveFarReadPtrWithoutSystemDelayUpdate(aec, move_elements);
+      int moved_elements = WebRtc_MoveReadPtr(aec->far_time_buf, move_elements);
       aec->knownDelay -= moved_elements * PART_LEN;
     } else {
       // 2 b) Apply signal based delay correction.
       int move_elements = SignalBasedDelayCorrection(aec);
-      int moved_elements =
-          MoveFarReadPtrWithoutSystemDelayUpdate(aec, move_elements);
-      int far_near_buffer_diff = WebRtc_available_read(aec->far_buf) -
+      int moved_elements = WebRtc_MoveReadPtr(aec->far_time_buf, move_elements);
+      int far_near_buffer_diff =
+          WebRtc_available_read(aec->far_time_buf) -
           WebRtc_available_read(aec->nearFrBuf) / PART_LEN;
       WebRtc_SoftResetDelayEstimator(aec->delay_estimator, moved_elements);
       WebRtc_SoftResetDelayEstimatorFarend(aec->delay_estimator_farend,
@@ -1849,7 +1797,9 @@ void WebRtcAec_ProcessFrames(AecCore* aec,
   }
 }
 
-int WebRtcAec_GetDelayMetricsCore(AecCore* self, int* median, int* std,
+int WebRtcAec_GetDelayMetricsCore(AecCore* self,
+                                  int* median,
+                                  int* std,
                                   float* fraction_poor_delays) {
   assert(self != NULL);
   assert(median != NULL);
@@ -1871,7 +1821,9 @@ int WebRtcAec_GetDelayMetricsCore(AecCore* self, int* median, int* std,
   return 0;
 }
 
-int WebRtcAec_echo_state(AecCore* self) { return self->echoState; }
+int WebRtcAec_echo_state(AecCore* self) {
+  return self->echoState;
+}
 
 void WebRtcAec_GetEchoStats(AecCore* self,
                             Stats* erl,
@@ -1884,10 +1836,6 @@ void WebRtcAec_GetEchoStats(AecCore* self,
   *erle = self->erle;
   *a_nlp = self->aNlp;
 }
-
-#ifdef WEBRTC_AEC_DEBUG_DUMP
-void* WebRtcAec_far_time_buf(AecCore* self) { return self->far_time_buf; }
-#endif
 
 void WebRtcAec_SetConfigCore(AecCore* self,
                              int nlp_mode,
@@ -1926,7 +1874,9 @@ int WebRtcAec_extended_filter_enabled(AecCore* self) {
   return self->extended_filter_enabled;
 }
 
-int WebRtcAec_system_delay(AecCore* self) { return self->system_delay; }
+int WebRtcAec_system_delay(AecCore* self) {
+  return self->system_delay;
+}
 
 void WebRtcAec_SetSystemDelay(AecCore* self, int delay) {
   assert(delay >= 0);

@@ -7,24 +7,57 @@
 # be found in the AUTHORS file in the root of the source tree.
 
 {
+  'conditions': [
+    ['enable_protobuf==1', {
+      'targets': [
+        {
+          'target_name': 'rtc_event_log_source',
+          'type': 'static_library',
+          'dependencies': [
+            '<(webrtc_root)/webrtc.gyp:rtc_event_log',
+            '<(webrtc_root)/webrtc.gyp:rtc_event_log_proto',
+          ],
+          'sources': [
+            'tools/rtc_event_log_source.h',
+            'tools/rtc_event_log_source.cc',
+          ],
+        },
+        {
+          'target_name': 'neteq_rtpplay',
+          'type': 'executable',
+          'dependencies': [
+            '<(DEPTH)/third_party/gflags/gflags.gyp:gflags',
+            '<(webrtc_root)/test/test.gyp:test_support_main',
+            'rtc_event_log_source',
+            'neteq',
+            'neteq_unittest_tools',
+            'pcm16b',
+          ],
+          'sources': [
+            'tools/neteq_rtpplay.cc',
+          ],
+          'defines': [
+          ],
+        }, # neteq_rtpplay
+        {
+          'target_name': 'neteq_unittest_proto',
+          'type': 'static_library',
+          'sources': [
+            'neteq_unittest.proto',
+          ],
+          'variables': {
+            'proto_in_dir': '.',
+            # Workaround to protect against gyp's pathname relativization when
+            # this file is included by modules.gyp.
+            'proto_out_protected': 'webrtc/audio_coding/neteq',
+            'proto_out_dir': '<(proto_out_protected)',
+          },
+          'includes': ['../../../build/protoc.gypi',],
+        },
+      ],
+    }],
+  ],
   'targets': [
-    {
-      'target_name': 'neteq_rtpplay',
-      'type': 'executable',
-      'dependencies': [
-        '<(DEPTH)/third_party/gflags/gflags.gyp:gflags',
-        '<(webrtc_root)/test/test.gyp:test_support_main',
-        'neteq',
-        'neteq_unittest_tools',
-        'pcm16b',
-      ],
-      'sources': [
-        'tools/neteq_rtpplay.cc',
-      ],
-      'defines': [
-      ],
-    }, # neteq_rtpplay
-
     {
       'target_name': 'RTPencode',
       'type': 'executable',
@@ -38,6 +71,7 @@
         'isac',
         'neteq_test_tools',  # Test helpers
         'pcm16b',
+        'webrtc_opus',
       ],
       'defines': [
         'CODEC_ILBC',
@@ -54,9 +88,10 @@
         'CODEC_CNGCODEC32',
         'CODEC_ATEVENT_DECODE',
         'CODEC_RED',
+        'CODEC_OPUS',
       ],
       'include_dirs': [
-        'interface',
+        'include',
         'test',
         '<(webrtc_root)',
       ],
@@ -272,7 +307,7 @@
       ],
       'direct_dependent_settings': {
         'include_dirs': [
-          'interface',
+          'include',
           'test',
           '<(webrtc_root)',
         ],
@@ -280,7 +315,7 @@
       'defines': [
       ],
       'include_dirs': [
-        'interface',
+        'include',
         'test',
         '<(webrtc_root)',
       ],

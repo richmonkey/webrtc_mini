@@ -33,7 +33,9 @@
 //#define FS 16000 /* sampling frequency (Hz) */
 
 #ifdef WIN32
+#ifndef CLOCKS_PER_SEC
 #define CLOCKS_PER_SEC 1000 /* Runtime statistics */
+#endif
 #endif
 
 using namespace std;
@@ -73,10 +75,10 @@ int main(int argc, char* argv[]) {
   FILE* plFile;
   int32_t sendBN;
 
-#ifdef _DEBUG
+#if !defined(NDEBUG)
   FILE* fy;
   double kbps;
-#endif /* _DEBUG */
+#endif
   size_t totalbits = 0;
   int totalsmpls = 0;
 
@@ -103,12 +105,12 @@ int main(int argc, char* argv[]) {
 
   BottleNeckModel BN_data;
 
-#ifdef _DEBUG
+#if !defined(NDEBUG)
   fy = fopen("bit_rate.dat", "w");
   fclose(fy);
   fy = fopen("bytes_frames.dat", "w");
   fclose(fy);
-#endif /* _DEBUG */
+#endif
 
   /* Handling wrong input arguments in the command line */
   if ((argc < 3) || (argc > 17)) {
@@ -885,14 +887,14 @@ int main(int argc, char* argv[]) {
 
     totalsmpls += declen;
     totalbits += 8 * stream_len;
-#ifdef _DEBUG
+#if !defined(NDEBUG)
     kbps = ((double)sampFreqKHz * 1000.) / ((double)cur_framesmpls) * 8.0 *
            stream_len / 1000.0;  // kbits/s
     fy = fopen("bit_rate.dat", "a");
     fprintf(fy, "Frame %i = %0.14f\n", framecnt, kbps);
     fclose(fy);
 
-#endif /* _DEBUG */
+#endif
   }
   printf("\n");
   printf("total bits               = %" PRIuS " bits\n", totalbits);

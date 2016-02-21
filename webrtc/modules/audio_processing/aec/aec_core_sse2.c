@@ -29,67 +29,72 @@ __inline static float MulIm(float aRe, float aIm, float bRe, float bIm) {
   return aRe * bIm + aIm * bRe;
 }
 
-static void FilterFarSSE2(AecCore* aec, float yf[2][PART_LEN1]) {
+static void FilterFarSSE2(int num_partitions,
+                          int x_fft_buf_block_pos,
+                          float x_fft_buf[2]
+                                         [kExtendedNumPartitions * PART_LEN1],
+                          float h_fft_buf[2]
+                                         [kExtendedNumPartitions * PART_LEN1],
+                          float y_fft[2][PART_LEN1]) {
   int i;
-  const int num_partitions = aec->num_partitions;
   for (i = 0; i < num_partitions; i++) {
     int j;
-    int xPos = (i + aec->xfBufBlockPos) * PART_LEN1;
+    int xPos = (i + x_fft_buf_block_pos) * PART_LEN1;
     int pos = i * PART_LEN1;
     // Check for wrap
-    if (i + aec->xfBufBlockPos >= num_partitions) {
+    if (i + x_fft_buf_block_pos >= num_partitions) {
       xPos -= num_partitions * (PART_LEN1);
     }
 
     // vectorized code (four at once)
     for (j = 0; j + 3 < PART_LEN1; j += 4) {
-      const __m128 xfBuf_re = _mm_loadu_ps(&aec->xfBuf[0][xPos + j]);
-      const __m128 xfBuf_im = _mm_loadu_ps(&aec->xfBuf[1][xPos + j]);
-      const __m128 wfBuf_re = _mm_loadu_ps(&aec->wfBuf[0][pos + j]);
-      const __m128 wfBuf_im = _mm_loadu_ps(&aec->wfBuf[1][pos + j]);
-      const __m128 yf_re = _mm_loadu_ps(&yf[0][j]);
-      const __m128 yf_im = _mm_loadu_ps(&yf[1][j]);
-      const __m128 a = _mm_mul_ps(xfBuf_re, wfBuf_re);
-      const __m128 b = _mm_mul_ps(xfBuf_im, wfBuf_im);
-      const __m128 c = _mm_mul_ps(xfBuf_re, wfBuf_im);
-      const __m128 d = _mm_mul_ps(xfBuf_im, wfBuf_re);
+      const __m128 x_fft_buf_re = _mm_loadu_ps(&x_fft_buf[0][xPos + j]);
+      const __m128 x_fft_buf_im = _mm_loadu_ps(&x_fft_buf[1][xPos + j]);
+      const __m128 h_fft_buf_re = _mm_loadu_ps(&h_fft_buf[0][pos + j]);
+      const __m128 h_fft_buf_im = _mm_loadu_ps(&h_fft_buf[1][pos + j]);
+      const __m128 y_fft_re = _mm_loadu_ps(&y_fft[0][j]);
+      const __m128 y_fft_im = _mm_loadu_ps(&y_fft[1][j]);
+      const __m128 a = _mm_mul_ps(x_fft_buf_re, h_fft_buf_re);
+      const __m128 b = _mm_mul_ps(x_fft_buf_im, h_fft_buf_im);
+      const __m128 c = _mm_mul_ps(x_fft_buf_re, h_fft_buf_im);
+      const __m128 d = _mm_mul_ps(x_fft_buf_im, h_fft_buf_re);
       const __m128 e = _mm_sub_ps(a, b);
       const __m128 f = _mm_add_ps(c, d);
-      const __m128 g = _mm_add_ps(yf_re, e);
-      const __m128 h = _mm_add_ps(yf_im, f);
-      _mm_storeu_ps(&yf[0][j], g);
-      _mm_storeu_ps(&yf[1][j], h);
+      const __m128 g = _mm_add_ps(y_fft_re, e);
+      const __m128 h = _mm_add_ps(y_fft_im, f);
+      _mm_storeu_ps(&y_fft[0][j], g);
+      _mm_storeu_ps(&y_fft[1][j], h);
     }
     // scalar code for the remaining items.
     for (; j < PART_LEN1; j++) {
-      yf[0][j] += MulRe(aec->xfBuf[0][xPos + j],
-                        aec->xfBuf[1][xPos + j],
-                        aec->wfBuf[0][pos + j],
-                        aec->wfBuf[1][pos + j]);
-      yf[1][j] += MulIm(aec->xfBuf[0][xPos + j],
-                        aec->xfBuf[1][xPos + j],
-                        aec->wfBuf[0][pos + j],
-                        aec->wfBuf[1][pos + j]);
+      y_fft[0][j] += MulRe(x_fft_buf[0][xPos + j], x_fft_buf[1][xPos + j],
+                           h_fft_buf[0][pos + j], h_fft_buf[1][pos + j]);
+      y_fft[1][j] += MulIm(x_fft_buf[0][xPos + j], x_fft_buf[1][xPos + j],
+                           h_fft_buf[0][pos + j], h_fft_buf[1][pos + j]);
     }
   }
 }
 
-static void ScaleErrorSignalSSE2(AecCore* aec, float ef[2][PART_LEN1]) {
+static void ScaleErrorSignalSSE2(int extended_filter_enabled,
+                                 float normal_mu,
+                                 float normal_error_threshold,
+                                 float x_pow[PART_LEN1],
+                                 float ef[2][PART_LEN1]) {
   const __m128 k1e_10f = _mm_set1_ps(1e-10f);
-  const __m128 kMu = aec->extended_filter_enabled ? _mm_set1_ps(kExtendedMu)
-                                                  : _mm_set1_ps(aec->normal_mu);
-  const __m128 kThresh = aec->extended_filter_enabled
+  const __m128 kMu = extended_filter_enabled ? _mm_set1_ps(kExtendedMu)
+                                             : _mm_set1_ps(normal_mu);
+  const __m128 kThresh = extended_filter_enabled
                              ? _mm_set1_ps(kExtendedErrorThreshold)
-                             : _mm_set1_ps(aec->normal_error_threshold);
+                             : _mm_set1_ps(normal_error_threshold);
 
   int i;
   // vectorized code (four at once)
   for (i = 0; i + 3 < PART_LEN1; i += 4) {
-    const __m128 xPow = _mm_loadu_ps(&aec->xPow[i]);
+    const __m128 x_pow_local = _mm_loadu_ps(&x_pow[i]);
     const __m128 ef_re_base = _mm_loadu_ps(&ef[0][i]);
     const __m128 ef_im_base = _mm_loadu_ps(&ef[1][i]);
 
-    const __m128 xPowPlus = _mm_add_ps(xPow, k1e_10f);
+    const __m128 xPowPlus = _mm_add_ps(x_pow_local, k1e_10f);
     __m128 ef_re = _mm_div_ps(ef_re_base, xPowPlus);
     __m128 ef_im = _mm_div_ps(ef_im_base, xPowPlus);
     const __m128 ef_re2 = _mm_mul_ps(ef_re, ef_re);
@@ -115,15 +120,14 @@ static void ScaleErrorSignalSSE2(AecCore* aec, float ef[2][PART_LEN1]) {
   }
   // scalar code for the remaining items.
   {
-    const float mu =
-        aec->extended_filter_enabled ? kExtendedMu : aec->normal_mu;
-    const float error_threshold = aec->extended_filter_enabled
+    const float mu = extended_filter_enabled ? kExtendedMu : normal_mu;
+    const float error_threshold = extended_filter_enabled
                                       ? kExtendedErrorThreshold
-                                      : aec->normal_error_threshold;
+                                      : normal_error_threshold;
     for (; i < (PART_LEN1); i++) {
       float abs_ef;
-      ef[0][i] /= (aec->xPow[i] + 1e-10f);
-      ef[1][i] /= (aec->xPow[i] + 1e-10f);
+      ef[0][i] /= (x_pow[i] + 1e-10f);
+      ef[1][i] /= (x_pow[i] + 1e-10f);
       abs_ef = sqrtf(ef[0][i] * ef[0][i] + ef[1][i] * ef[1][i]);
 
       if (abs_ef > error_threshold) {
@@ -139,33 +143,36 @@ static void ScaleErrorSignalSSE2(AecCore* aec, float ef[2][PART_LEN1]) {
   }
 }
 
-static void FilterAdaptationSSE2(AecCore* aec,
-                                 float* fft,
-                                 float ef[2][PART_LEN1]) {
+static void FilterAdaptationSSE2(
+    int num_partitions,
+    int x_fft_buf_block_pos,
+    float x_fft_buf[2][kExtendedNumPartitions * PART_LEN1],
+    float e_fft[2][PART_LEN1],
+    float h_fft_buf[2][kExtendedNumPartitions * PART_LEN1]) {
+  float fft[PART_LEN2];
   int i, j;
-  const int num_partitions = aec->num_partitions;
   for (i = 0; i < num_partitions; i++) {
-    int xPos = (i + aec->xfBufBlockPos) * (PART_LEN1);
+    int xPos = (i + x_fft_buf_block_pos) * (PART_LEN1);
     int pos = i * PART_LEN1;
     // Check for wrap
-    if (i + aec->xfBufBlockPos >= num_partitions) {
+    if (i + x_fft_buf_block_pos >= num_partitions) {
       xPos -= num_partitions * PART_LEN1;
     }
 
     // Process the whole array...
     for (j = 0; j < PART_LEN; j += 4) {
-      // Load xfBuf and ef.
-      const __m128 xfBuf_re = _mm_loadu_ps(&aec->xfBuf[0][xPos + j]);
-      const __m128 xfBuf_im = _mm_loadu_ps(&aec->xfBuf[1][xPos + j]);
-      const __m128 ef_re = _mm_loadu_ps(&ef[0][j]);
-      const __m128 ef_im = _mm_loadu_ps(&ef[1][j]);
-      // Calculate the product of conjugate(xfBuf) by ef.
+      // Load x_fft_buf and e_fft.
+      const __m128 x_fft_buf_re = _mm_loadu_ps(&x_fft_buf[0][xPos + j]);
+      const __m128 x_fft_buf_im = _mm_loadu_ps(&x_fft_buf[1][xPos + j]);
+      const __m128 e_fft_re = _mm_loadu_ps(&e_fft[0][j]);
+      const __m128 e_fft_im = _mm_loadu_ps(&e_fft[1][j]);
+      // Calculate the product of conjugate(x_fft_buf) by e_fft.
       //   re(conjugate(a) * b) = aRe * bRe + aIm * bIm
       //   im(conjugate(a) * b)=  aRe * bIm - aIm * bRe
-      const __m128 a = _mm_mul_ps(xfBuf_re, ef_re);
-      const __m128 b = _mm_mul_ps(xfBuf_im, ef_im);
-      const __m128 c = _mm_mul_ps(xfBuf_re, ef_im);
-      const __m128 d = _mm_mul_ps(xfBuf_im, ef_re);
+      const __m128 a = _mm_mul_ps(x_fft_buf_re, e_fft_re);
+      const __m128 b = _mm_mul_ps(x_fft_buf_im, e_fft_im);
+      const __m128 c = _mm_mul_ps(x_fft_buf_re, e_fft_im);
+      const __m128 d = _mm_mul_ps(x_fft_buf_im, e_fft_re);
       const __m128 e = _mm_add_ps(a, b);
       const __m128 f = _mm_sub_ps(c, d);
       // Interleave real and imaginary parts.
@@ -176,10 +183,9 @@ static void FilterAdaptationSSE2(AecCore* aec,
       _mm_storeu_ps(&fft[2 * j + 4], h);
     }
     // ... and fixup the first imaginary entry.
-    fft[1] = MulRe(aec->xfBuf[0][xPos + PART_LEN],
-                   -aec->xfBuf[1][xPos + PART_LEN],
-                   ef[0][PART_LEN],
-                   ef[1][PART_LEN]);
+    fft[1] =
+        MulRe(x_fft_buf[0][xPos + PART_LEN], -x_fft_buf[1][xPos + PART_LEN],
+              e_fft[0][PART_LEN], e_fft[1][PART_LEN]);
 
     aec_rdft_inverse_128(fft);
     memset(fft + PART_LEN, 0, sizeof(float) * PART_LEN);
@@ -197,11 +203,11 @@ static void FilterAdaptationSSE2(AecCore* aec,
     aec_rdft_forward_128(fft);
 
     {
-      float wt1 = aec->wfBuf[1][pos];
-      aec->wfBuf[0][pos + PART_LEN] += fft[1];
+      float wt1 = h_fft_buf[1][pos];
+      h_fft_buf[0][pos + PART_LEN] += fft[1];
       for (j = 0; j < PART_LEN; j += 4) {
-        __m128 wtBuf_re = _mm_loadu_ps(&aec->wfBuf[0][pos + j]);
-        __m128 wtBuf_im = _mm_loadu_ps(&aec->wfBuf[1][pos + j]);
+        __m128 wtBuf_re = _mm_loadu_ps(&h_fft_buf[0][pos + j]);
+        __m128 wtBuf_im = _mm_loadu_ps(&h_fft_buf[1][pos + j]);
         const __m128 fft0 = _mm_loadu_ps(&fft[2 * j + 0]);
         const __m128 fft4 = _mm_loadu_ps(&fft[2 * j + 4]);
         const __m128 fft_re =
@@ -210,10 +216,10 @@ static void FilterAdaptationSSE2(AecCore* aec,
             _mm_shuffle_ps(fft0, fft4, _MM_SHUFFLE(3, 1, 3, 1));
         wtBuf_re = _mm_add_ps(wtBuf_re, fft_re);
         wtBuf_im = _mm_add_ps(wtBuf_im, fft_im);
-        _mm_storeu_ps(&aec->wfBuf[0][pos + j], wtBuf_re);
-        _mm_storeu_ps(&aec->wfBuf[1][pos + j], wtBuf_im);
+        _mm_storeu_ps(&h_fft_buf[0][pos + j], wtBuf_re);
+        _mm_storeu_ps(&h_fft_buf[1][pos + j], wtBuf_im);
       }
-      aec->wfBuf[1][pos] = wt1;
+      h_fft_buf[1][pos] = wt1;
     }
   }
 }
@@ -269,16 +275,16 @@ static __m128 mm_pow_ps(__m128 a, __m128 b) {
     //    pol5(y) = C5 * y^5 + C4 * y^4 + C3 * y^3 + C2 * y^2 + C1 * y + C0
     static const ALIGN16_BEG float ALIGN16_END C5[4] = {
         -3.4436006e-2f, -3.4436006e-2f, -3.4436006e-2f, -3.4436006e-2f};
-    static const ALIGN16_BEG float ALIGN16_END
-        C4[4] = {3.1821337e-1f, 3.1821337e-1f, 3.1821337e-1f, 3.1821337e-1f};
-    static const ALIGN16_BEG float ALIGN16_END
-        C3[4] = {-1.2315303f, -1.2315303f, -1.2315303f, -1.2315303f};
-    static const ALIGN16_BEG float ALIGN16_END
-        C2[4] = {2.5988452f, 2.5988452f, 2.5988452f, 2.5988452f};
-    static const ALIGN16_BEG float ALIGN16_END
-        C1[4] = {-3.3241990f, -3.3241990f, -3.3241990f, -3.3241990f};
-    static const ALIGN16_BEG float ALIGN16_END
-        C0[4] = {3.1157899f, 3.1157899f, 3.1157899f, 3.1157899f};
+    static const ALIGN16_BEG float ALIGN16_END C4[4] = {
+        3.1821337e-1f, 3.1821337e-1f, 3.1821337e-1f, 3.1821337e-1f};
+    static const ALIGN16_BEG float ALIGN16_END C3[4] = {
+        -1.2315303f, -1.2315303f, -1.2315303f, -1.2315303f};
+    static const ALIGN16_BEG float ALIGN16_END C2[4] = {2.5988452f, 2.5988452f,
+                                                        2.5988452f, 2.5988452f};
+    static const ALIGN16_BEG float ALIGN16_END C1[4] = {
+        -3.3241990f, -3.3241990f, -3.3241990f, -3.3241990f};
+    static const ALIGN16_BEG float ALIGN16_END C0[4] = {3.1157899f, 3.1157899f,
+                                                        3.1157899f, 3.1157899f};
     const __m128 pol5_y_0 = _mm_mul_ps(y, *((__m128*)C5));
     const __m128 pol5_y_1 = _mm_add_ps(pol5_y_0, *((__m128*)C4));
     const __m128 pol5_y_2 = _mm_mul_ps(pol5_y_1, y);
@@ -322,8 +328,8 @@ static __m128 mm_pow_ps(__m128 a, __m128 b) {
     const __m128 x_min = _mm_min_ps(b_log2_a, *((__m128*)max_input));
     const __m128 x_max = _mm_max_ps(x_min, *((__m128*)min_input));
     // Compute n.
-    static const ALIGN16_BEG float half[4] ALIGN16_END = {0.5f, 0.5f,
-                                                          0.5f, 0.5f};
+    static const ALIGN16_BEG float half[4] ALIGN16_END = {0.5f, 0.5f, 0.5f,
+                                                          0.5f};
     const __m128 x_minus_half = _mm_sub_ps(x_max, *((__m128*)half));
     const __m128i x_minus_half_floor = _mm_cvtps_epi32(x_minus_half);
     // Compute 2^n.
@@ -420,14 +426,15 @@ static void OverdriveAndSuppressSSE2(AecCore* aec,
   }
 }
 
-__inline static void _mm_add_ps_4x1(__m128 sum, float *dst) {
+__inline static void _mm_add_ps_4x1(__m128 sum, float* dst) {
   // A+B C+D
   sum = _mm_add_ps(sum, _mm_shuffle_ps(sum, sum, _MM_SHUFFLE(0, 0, 3, 2)));
   // A+B+C+D A+B+C+D
   sum = _mm_add_ps(sum, _mm_shuffle_ps(sum, sum, _MM_SHUFFLE(1, 1, 1, 1)));
   _mm_store_ss(dst, sum);
 }
-static int PartitionDelay(const AecCore* aec) {
+
+static int PartitionDelaySSE2(const AecCore* aec) {
   // Measures the energy in each filter partition and returns the partition with
   // highest energy.
   // TODO(bjornv): Spread computational cost by computing one partition per
@@ -476,14 +483,16 @@ static int PartitionDelay(const AecCore* aec) {
 static void SmoothedPSD(AecCore* aec,
                         float efw[2][PART_LEN1],
                         float dfw[2][PART_LEN1],
-                        float xfw[2][PART_LEN1]) {
+                        float xfw[2][PART_LEN1],
+                        int* extreme_filter_divergence) {
   // Power estimate smoothing coefficients.
-  const float* ptrGCoh = aec->extended_filter_enabled
-      ? WebRtcAec_kExtendedSmoothingCoefficients[aec->mult - 1]
-      : WebRtcAec_kNormalSmoothingCoefficients[aec->mult - 1];
+  const float* ptrGCoh =
+      aec->extended_filter_enabled
+          ? WebRtcAec_kExtendedSmoothingCoefficients[aec->mult - 1]
+          : WebRtcAec_kNormalSmoothingCoefficients[aec->mult - 1];
   int i;
   float sdSum = 0, seSum = 0;
-  const __m128 vec_15 =  _mm_set1_ps(WebRtcAec_kMinFarendPSD);
+  const __m128 vec_15 = _mm_set1_ps(WebRtcAec_kMinFarendPSD);
   const __m128 vec_GCoh0 = _mm_set1_ps(ptrGCoh[0]);
   const __m128 vec_GCoh1 = _mm_set1_ps(ptrGCoh[1]);
   __m128 vec_sdSum = _mm_set1_ps(0.0f);
@@ -516,18 +525,18 @@ static void SmoothedPSD(AecCore* aec,
     {
       const __m128 vec_3210 = _mm_loadu_ps(&aec->sde[i][0]);
       const __m128 vec_7654 = _mm_loadu_ps(&aec->sde[i + 2][0]);
-      __m128 vec_a = _mm_shuffle_ps(vec_3210, vec_7654,
-                                    _MM_SHUFFLE(2, 0, 2, 0));
-      __m128 vec_b = _mm_shuffle_ps(vec_3210, vec_7654,
-                                    _MM_SHUFFLE(3, 1, 3, 1));
+      __m128 vec_a =
+          _mm_shuffle_ps(vec_3210, vec_7654, _MM_SHUFFLE(2, 0, 2, 0));
+      __m128 vec_b =
+          _mm_shuffle_ps(vec_3210, vec_7654, _MM_SHUFFLE(3, 1, 3, 1));
       __m128 vec_dfwefw0011 = _mm_mul_ps(vec_dfw0, vec_efw0);
       __m128 vec_dfwefw0110 = _mm_mul_ps(vec_dfw0, vec_efw1);
       vec_a = _mm_mul_ps(vec_a, vec_GCoh0);
       vec_b = _mm_mul_ps(vec_b, vec_GCoh0);
-      vec_dfwefw0011 = _mm_add_ps(vec_dfwefw0011,
-                                  _mm_mul_ps(vec_dfw1, vec_efw1));
-      vec_dfwefw0110 = _mm_sub_ps(vec_dfwefw0110,
-                                  _mm_mul_ps(vec_dfw1, vec_efw0));
+      vec_dfwefw0011 =
+          _mm_add_ps(vec_dfwefw0011, _mm_mul_ps(vec_dfw1, vec_efw1));
+      vec_dfwefw0110 =
+          _mm_sub_ps(vec_dfwefw0110, _mm_mul_ps(vec_dfw1, vec_efw0));
       vec_a = _mm_add_ps(vec_a, _mm_mul_ps(vec_dfwefw0011, vec_GCoh1));
       vec_b = _mm_add_ps(vec_b, _mm_mul_ps(vec_dfwefw0110, vec_GCoh1));
       _mm_storeu_ps(&aec->sde[i][0], _mm_unpacklo_ps(vec_a, vec_b));
@@ -537,18 +546,18 @@ static void SmoothedPSD(AecCore* aec,
     {
       const __m128 vec_3210 = _mm_loadu_ps(&aec->sxd[i][0]);
       const __m128 vec_7654 = _mm_loadu_ps(&aec->sxd[i + 2][0]);
-      __m128 vec_a = _mm_shuffle_ps(vec_3210, vec_7654,
-                                    _MM_SHUFFLE(2, 0, 2, 0));
-      __m128 vec_b = _mm_shuffle_ps(vec_3210, vec_7654,
-                                    _MM_SHUFFLE(3, 1, 3, 1));
+      __m128 vec_a =
+          _mm_shuffle_ps(vec_3210, vec_7654, _MM_SHUFFLE(2, 0, 2, 0));
+      __m128 vec_b =
+          _mm_shuffle_ps(vec_3210, vec_7654, _MM_SHUFFLE(3, 1, 3, 1));
       __m128 vec_dfwxfw0011 = _mm_mul_ps(vec_dfw0, vec_xfw0);
       __m128 vec_dfwxfw0110 = _mm_mul_ps(vec_dfw0, vec_xfw1);
       vec_a = _mm_mul_ps(vec_a, vec_GCoh0);
       vec_b = _mm_mul_ps(vec_b, vec_GCoh0);
-      vec_dfwxfw0011 = _mm_add_ps(vec_dfwxfw0011,
-                                  _mm_mul_ps(vec_dfw1, vec_xfw1));
-      vec_dfwxfw0110 = _mm_sub_ps(vec_dfwxfw0110,
-                                  _mm_mul_ps(vec_dfw1, vec_xfw0));
+      vec_dfwxfw0011 =
+          _mm_add_ps(vec_dfwxfw0011, _mm_mul_ps(vec_dfw1, vec_xfw1));
+      vec_dfwxfw0110 =
+          _mm_sub_ps(vec_dfwxfw0110, _mm_mul_ps(vec_dfw1, vec_xfw0));
       vec_a = _mm_add_ps(vec_a, _mm_mul_ps(vec_dfwxfw0011, vec_GCoh1));
       vec_b = _mm_add_ps(vec_b, _mm_mul_ps(vec_dfwxfw0110, vec_GCoh1));
       _mm_storeu_ps(&aec->sxd[i][0], _mm_unpacklo_ps(vec_a, vec_b));
@@ -571,11 +580,10 @@ static void SmoothedPSD(AecCore* aec,
     // The threshold is not arbitrarily chosen, but balances protection and
     // adverse interaction with the algorithm's tuning.
     // TODO(bjornv): investigate further why this is so sensitive.
-    aec->sx[i] =
-        ptrGCoh[0] * aec->sx[i] +
-        ptrGCoh[1] * WEBRTC_SPL_MAX(
-            xfw[0][i] * xfw[0][i] + xfw[1][i] * xfw[1][i],
-            WebRtcAec_kMinFarendPSD);
+    aec->sx[i] = ptrGCoh[0] * aec->sx[i] +
+                 ptrGCoh[1] * WEBRTC_SPL_MAX(
+                                  xfw[0][i] * xfw[0][i] + xfw[1][i] * xfw[1][i],
+                                  WebRtcAec_kMinFarendPSD);
 
     aec->sde[i][0] =
         ptrGCoh[0] * aec->sde[i][0] +
@@ -595,19 +603,16 @@ static void SmoothedPSD(AecCore* aec,
     seSum += aec->se[i];
   }
 
-  // Divergent filter safeguard.
+  // Divergent filter safeguard update.
   aec->divergeState = (aec->divergeState ? 1.05f : 1.0f) * seSum > sdSum;
 
-  if (aec->divergeState)
-    memcpy(efw, dfw, sizeof(efw[0][0]) * 2 * PART_LEN1);
-
-  // Reset if error is significantly larger than nearend (13 dB).
-  if (!aec->extended_filter_enabled && seSum > (19.95f * sdSum))
-    memset(aec->wfBuf, 0, sizeof(aec->wfBuf));
+  // Signal extreme filter divergence if the error is significantly larger
+  // than the nearend (13 dB).
+  *extreme_filter_divergence = (seSum > (19.95f * sdSum));
 }
 
 // Window time domain data to be used by the fft.
-__inline static void WindowData(float* x_windowed, const float* x) {
+static void WindowDataSSE2(float* x_windowed, const float* x) {
   int i;
   for (i = 0; i < PART_LEN; i += 4) {
     const __m128 vec_Buf1 = _mm_loadu_ps(&x[i]);
@@ -617,9 +622,8 @@ __inline static void WindowData(float* x_windowed, const float* x) {
     __m128 vec_sqrtHanning_rev =
         _mm_loadu_ps(&WebRtcAec_sqrtHanning[PART_LEN - i - 3]);
     // D C B A
-    vec_sqrtHanning_rev =
-        _mm_shuffle_ps(vec_sqrtHanning_rev, vec_sqrtHanning_rev,
-                       _MM_SHUFFLE(0, 1, 2, 3));
+    vec_sqrtHanning_rev = _mm_shuffle_ps(
+        vec_sqrtHanning_rev, vec_sqrtHanning_rev, _MM_SHUFFLE(0, 1, 2, 3));
     _mm_storeu_ps(&x_windowed[i], _mm_mul_ps(vec_Buf1, vec_sqrtHanning));
     _mm_storeu_ps(&x_windowed[PART_LEN + i],
                   _mm_mul_ps(vec_Buf2, vec_sqrtHanning_rev));
@@ -627,16 +631,16 @@ __inline static void WindowData(float* x_windowed, const float* x) {
 }
 
 // Puts fft output data into a complex valued array.
-__inline static void StoreAsComplex(const float* data,
-                                    float data_complex[2][PART_LEN1]) {
+static void StoreAsComplexSSE2(const float* data,
+                               float data_complex[2][PART_LEN1]) {
   int i;
   for (i = 0; i < PART_LEN; i += 4) {
     const __m128 vec_fft0 = _mm_loadu_ps(&data[2 * i]);
     const __m128 vec_fft4 = _mm_loadu_ps(&data[2 * i + 4]);
-    const __m128 vec_a = _mm_shuffle_ps(vec_fft0, vec_fft4,
-                                        _MM_SHUFFLE(2, 0, 2, 0));
-    const __m128 vec_b = _mm_shuffle_ps(vec_fft0, vec_fft4,
-                                        _MM_SHUFFLE(3, 1, 3, 1));
+    const __m128 vec_a =
+        _mm_shuffle_ps(vec_fft0, vec_fft4, _MM_SHUFFLE(2, 0, 2, 0));
+    const __m128 vec_b =
+        _mm_shuffle_ps(vec_fft0, vec_fft4, _MM_SHUFFLE(3, 1, 3, 1));
     _mm_storeu_ps(&data_complex[0][i], vec_a);
     _mm_storeu_ps(&data_complex[1][i], vec_b);
   }
@@ -649,57 +653,40 @@ __inline static void StoreAsComplex(const float* data,
 
 static void SubbandCoherenceSSE2(AecCore* aec,
                                  float efw[2][PART_LEN1],
+                                 float dfw[2][PART_LEN1],
                                  float xfw[2][PART_LEN1],
                                  float* fft,
                                  float* cohde,
-                                 float* cohxd) {
-  float dfw[2][PART_LEN1];
+                                 float* cohxd,
+                                 int* extreme_filter_divergence) {
   int i;
 
-  if (aec->delayEstCtr == 0)
-    aec->delayIdx = PartitionDelay(aec);
-
-  // Use delayed far.
-  memcpy(xfw,
-         aec->xfwBuf + aec->delayIdx * PART_LEN1,
-         sizeof(xfw[0][0]) * 2 * PART_LEN1);
-
-  // Windowed near fft
-  WindowData(fft, aec->dBuf);
-  aec_rdft_forward_128(fft);
-  StoreAsComplex(fft, dfw);
-
-  // Windowed error fft
-  WindowData(fft, aec->eBuf);
-  aec_rdft_forward_128(fft);
-  StoreAsComplex(fft, efw);
-
-  SmoothedPSD(aec, efw, dfw, xfw);
+  SmoothedPSD(aec, efw, dfw, xfw, extreme_filter_divergence);
 
   {
-    const __m128 vec_1eminus10 =  _mm_set1_ps(1e-10f);
+    const __m128 vec_1eminus10 = _mm_set1_ps(1e-10f);
 
     // Subband coherence
     for (i = 0; i + 3 < PART_LEN1; i += 4) {
       const __m128 vec_sd = _mm_loadu_ps(&aec->sd[i]);
       const __m128 vec_se = _mm_loadu_ps(&aec->se[i]);
       const __m128 vec_sx = _mm_loadu_ps(&aec->sx[i]);
-      const __m128 vec_sdse = _mm_add_ps(vec_1eminus10,
-                                         _mm_mul_ps(vec_sd, vec_se));
-      const __m128 vec_sdsx = _mm_add_ps(vec_1eminus10,
-                                         _mm_mul_ps(vec_sd, vec_sx));
+      const __m128 vec_sdse =
+          _mm_add_ps(vec_1eminus10, _mm_mul_ps(vec_sd, vec_se));
+      const __m128 vec_sdsx =
+          _mm_add_ps(vec_1eminus10, _mm_mul_ps(vec_sd, vec_sx));
       const __m128 vec_sde_3210 = _mm_loadu_ps(&aec->sde[i][0]);
       const __m128 vec_sde_7654 = _mm_loadu_ps(&aec->sde[i + 2][0]);
       const __m128 vec_sxd_3210 = _mm_loadu_ps(&aec->sxd[i][0]);
       const __m128 vec_sxd_7654 = _mm_loadu_ps(&aec->sxd[i + 2][0]);
-      const __m128 vec_sde_0 = _mm_shuffle_ps(vec_sde_3210, vec_sde_7654,
-                                              _MM_SHUFFLE(2, 0, 2, 0));
-      const __m128 vec_sde_1 = _mm_shuffle_ps(vec_sde_3210, vec_sde_7654,
-                                              _MM_SHUFFLE(3, 1, 3, 1));
-      const __m128 vec_sxd_0 = _mm_shuffle_ps(vec_sxd_3210, vec_sxd_7654,
-                                              _MM_SHUFFLE(2, 0, 2, 0));
-      const __m128 vec_sxd_1 = _mm_shuffle_ps(vec_sxd_3210, vec_sxd_7654,
-                                              _MM_SHUFFLE(3, 1, 3, 1));
+      const __m128 vec_sde_0 =
+          _mm_shuffle_ps(vec_sde_3210, vec_sde_7654, _MM_SHUFFLE(2, 0, 2, 0));
+      const __m128 vec_sde_1 =
+          _mm_shuffle_ps(vec_sde_3210, vec_sde_7654, _MM_SHUFFLE(3, 1, 3, 1));
+      const __m128 vec_sxd_0 =
+          _mm_shuffle_ps(vec_sxd_3210, vec_sxd_7654, _MM_SHUFFLE(2, 0, 2, 0));
+      const __m128 vec_sxd_1 =
+          _mm_shuffle_ps(vec_sxd_3210, vec_sxd_7654, _MM_SHUFFLE(3, 1, 3, 1));
       __m128 vec_cohde = _mm_mul_ps(vec_sde_0, vec_sde_0);
       __m128 vec_cohxd = _mm_mul_ps(vec_sxd_0, vec_sxd_0);
       vec_cohde = _mm_add_ps(vec_cohde, _mm_mul_ps(vec_sde_1, vec_sde_1));
@@ -728,4 +715,7 @@ void WebRtcAec_InitAec_SSE2(void) {
   WebRtcAec_FilterAdaptation = FilterAdaptationSSE2;
   WebRtcAec_OverdriveAndSuppress = OverdriveAndSuppressSSE2;
   WebRtcAec_SubbandCoherence = SubbandCoherenceSSE2;
+  WebRtcAec_StoreAsComplex = StoreAsComplexSSE2;
+  WebRtcAec_PartitionDelay = PartitionDelaySSE2;
+  WebRtcAec_WindowData = WindowDataSSE2;
 }

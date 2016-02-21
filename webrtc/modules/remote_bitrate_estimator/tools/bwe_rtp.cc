@@ -10,18 +10,18 @@
 
 #include "webrtc/modules/remote_bitrate_estimator/tools/bwe_rtp.h"
 
-#include <sstream>
 #include <stdio.h>
+
+#include <set>
+#include <sstream>
 #include <string>
 
 #include "gflags/gflags.h"
 #include "webrtc/modules/remote_bitrate_estimator/remote_bitrate_estimator_abs_send_time.h"
 #include "webrtc/modules/remote_bitrate_estimator/remote_bitrate_estimator_single_stream.h"
-#include "webrtc/modules/rtp_rtcp/interface/rtp_header_parser.h"
-#include "webrtc/modules/rtp_rtcp/interface/rtp_payload_registry.h"
+#include "webrtc/modules/rtp_rtcp/include/rtp_header_parser.h"
+#include "webrtc/modules/rtp_rtcp/include/rtp_payload_registry.h"
 #include "webrtc/test/rtp_file_reader.h"
-
-const int kMinBitrateBps = 30000;
 
 namespace flags {
 
@@ -116,14 +116,14 @@ bool ParseArgsAndSetupEstimator(int argc,
   if (estimator) {
     switch (extension) {
       case webrtc::kRtpExtensionAbsoluteSendTime: {
-        *estimator = new webrtc::RemoteBitrateEstimatorAbsSendTime(
-            observer, clock, kMinBitrateBps);
+        *estimator =
+            new webrtc::RemoteBitrateEstimatorAbsSendTime(observer, clock);
           *estimator_used = "AbsoluteSendTimeRemoteBitrateEstimator";
           break;
         }
       case webrtc::kRtpExtensionTransmissionTimeOffset: {
-        *estimator = new webrtc::RemoteBitrateEstimatorSingleStream(
-            observer, clock, kMinBitrateBps);
+        *estimator =
+            new webrtc::RemoteBitrateEstimatorSingleStream(observer, clock);
           *estimator_used = "RemoteBitrateEstimator";
           break;
         }

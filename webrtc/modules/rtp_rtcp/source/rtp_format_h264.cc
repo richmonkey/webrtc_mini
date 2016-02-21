@@ -11,7 +11,7 @@
 #include <string.h>
 
 #include "webrtc/base/logging.h"
-#include "webrtc/modules/interface/module_common_types.h"
+#include "webrtc/modules/include/module_common_types.h"
 #include "webrtc/modules/rtp_rtcp/source/byte_io.h"
 #include "webrtc/modules/rtp_rtcp/source/h264_sps_parser.h"
 #include "webrtc/modules/rtp_rtcp/source/rtp_format_h264.h"
@@ -101,6 +101,7 @@ bool ParseSingleNalu(RtpDepacketizer::ParsedPayload* parsed_payload,
   switch (nal_type) {
     case kSps:
     case kPps:
+    case kSei:
     case kIdr:
       parsed_payload->frame_type = kVideoFrameKey;
       break;
@@ -153,8 +154,7 @@ RtpPacketizerH264::RtpPacketizerH264(FrameType frame_type,
                                      size_t max_payload_len)
     : payload_data_(NULL),
       payload_size_(0),
-      max_payload_len_(max_payload_len),
-      frame_type_(frame_type) {
+      max_payload_len_(max_payload_len) {
 }
 
 RtpPacketizerH264::~RtpPacketizerH264() {

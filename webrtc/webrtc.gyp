@@ -6,12 +6,42 @@
 # in the file PATENTS.  All contributing project authors may
 # be found in the AUTHORS file in the root of the source tree.
 {
+  'variables': {
+    'webrtc_all_dependencies': [
+      'base/base.gyp:*',
+      'sound/sound.gyp:*',
+      'common.gyp:*',
+      'common_audio/common_audio.gyp:*',
+      'common_video/common_video.gyp:*',
+      'media/media.gyp:*',
+      'modules/modules.gyp:*',
+      'p2p/p2p.gyp:*',
+      'system_wrappers/system_wrappers.gyp:*',
+      'tools/tools.gyp:*',
+      'voice_engine/voice_engine.gyp:*',
+      '<(webrtc_vp8_dir)/vp8.gyp:*',
+      '<(webrtc_vp9_dir)/vp9.gyp:*',
+    ],
+  },
   'conditions': [
+    ['build_with_chromium==0', {
+      # TODO(kjellander): Move this to webrtc_all_dependencies once all of talk/
+      # has been moved to webrtc/. It can't be processed by Chromium since the
+      # reference to buid/java.gypi is using an absolute path (and includes
+      # entries cannot contain variables).
+      'variables': {
+        'webrtc_all_dependencies': [
+          'api/api.gyp:*',
+        ],
+      },
+    }],
     ['include_tests==1', {
       'includes': [
         'libjingle/xmllite/xmllite_tests.gypi',
         'libjingle/xmpp/xmpp_tests.gypi',
+        'media/media_tests.gypi',
         'p2p/p2p_tests.gypi',
+        'pc/pc_tests.gypi',
         'sound/sound_tests.gypi',
         'webrtc_tests.gypi',
       ],
@@ -22,36 +52,37 @@
           # This target should only be built if enable_protobuf is defined
           'target_name': 'rtc_event_log_proto',
           'type': 'static_library',
-          'sources': ['video/rtc_event_log.proto',],
+          'sources': ['call/rtc_event_log.proto',],
           'variables': {
-            'proto_in_dir': 'video',
-            'proto_out_dir': 'webrtc/video',
+            'proto_in_dir': 'call',
+            'proto_out_dir': 'webrtc/call',
           },
         'includes': ['build/protoc.gypi'],
+        },
+      ],
+    }],
+    ['include_tests==1 and enable_protobuf==1', {
+      'targets': [
+        {
+          'target_name': 'rtc_event_log2rtp_dump',
+          'type': 'executable',
+          'sources': ['call/rtc_event_log2rtp_dump.cc',],
+          'dependencies': [
+            '<(DEPTH)/third_party/gflags/gflags.gyp:gflags',
+            'rtc_event_log',
+            'rtc_event_log_proto',
+            'test/test.gyp:rtp_test_utils'
+          ],
         },
       ],
     }],
   ],
   'includes': [
     'build/common.gypi',
+    'audio/webrtc_audio.gypi',
+    'call/webrtc_call.gypi',
     'video/webrtc_video.gypi',
   ],
-  'variables': {
-    'webrtc_all_dependencies': [
-      'base/base.gyp:*',
-      'sound/sound.gyp:*',
-      'common.gyp:*',
-      'common_audio/common_audio.gyp:*',
-      'common_video/common_video.gyp:*',
-      'modules/modules.gyp:*',
-      'p2p/p2p.gyp:*',
-      'system_wrappers/system_wrappers.gyp:*',
-      'tools/tools.gyp:*',
-      'voice_engine/voice_engine.gyp:*',
-      '<(webrtc_vp8_dir)/vp8.gyp:*',
-      '<(webrtc_vp9_dir)/vp9.gyp:*',
-    ],
-  },
   'targets': [
     {
       'target_name': 'webrtc_all',
@@ -63,13 +94,13 @@
       'conditions': [
         ['include_tests==1', {
           'dependencies': [
+            'api/api_tests.gyp:*',
             'common_video/common_video_unittests.gyp:*',
             'rtc_unittests',
             'system_wrappers/system_wrappers_tests.gyp:*',
             'test/metrics.gyp:*',
             'test/test.gyp:*',
-            'test/webrtc_test_common.gyp:webrtc_test_common_unittests',
-            'video_engine/video_engine_core_unittests.gyp:video_engine_core_unittests',
+            'test/webrtc_test_common.gyp:*',
             'webrtc_tests',
           ],
         }],
@@ -81,6 +112,7 @@
       'sources': [
         'audio_receive_stream.h',
         'audio_send_stream.h',
+        'audio_state.h',
         'call.h',
         'config.h',
         'frame_callback.h',
@@ -90,16 +122,20 @@
         'video_renderer.h',
         'video_send_stream.h',
 
+        '<@(webrtc_audio_sources)',
+        '<@(webrtc_call_sources)',
         '<@(webrtc_video_sources)',
       ],
       'dependencies': [
         'common.gyp:*',
+        '<@(webrtc_audio_dependencies)',
+        '<@(webrtc_call_dependencies)',
         '<@(webrtc_video_dependencies)',
         'rtc_event_log',
       ],
       'conditions': [
-        # TODO(andresp): Chromium libpeerconnection should link directly with
-        # this and no if conditions should be needed on webrtc build files.
+        # TODO(andresp): Chromium should link directly with this and no if
+        # conditions should be needed on webrtc build files.
         ['build_with_chromium==1', {
           'dependencies': [
             '<(webrtc_root)/modules/modules.gyp:video_capture',
@@ -112,8 +148,8 @@
       'target_name': 'rtc_event_log',
       'type': 'static_library',
       'sources': [
-        'video/rtc_event_log.cc',
-        'video/rtc_event_log.h',
+        'call/rtc_event_log.cc',
+        'call/rtc_event_log.h',
       ],
       'conditions': [
         # If enable_protobuf is defined, we want to compile the protobuf

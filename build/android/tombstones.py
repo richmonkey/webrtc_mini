@@ -10,7 +10,6 @@
 # Assumes tombstone file was created with current symbols.
 
 import datetime
-import itertools
 import logging
 import multiprocessing
 import os
@@ -19,11 +18,13 @@ import subprocess
 import sys
 import optparse
 
-from pylib.device import adb_wrapper
-from pylib.device import device_errors
-from pylib.device import device_utils
-from pylib.utils import run_tests_helper
+import devil_chromium
 
+from devil.android import device_blacklist
+from devil.android import device_errors
+from devil.android import device_utils
+from devil.utils import run_tests_helper
+from pylib import constants
 
 _TZ_UTC = {'TZ': 'UTC'}
 
@@ -37,17 +38,22 @@ def _ListTombstones(device):
     Tuples of (tombstone filename, date time of file on device).
   """
   try:
+    if not device.PathExists('/data/tombstones', as_root=True):
+      return
+    # TODO(perezju): Introduce a DeviceUtils.Ls() method (crbug.com/552376).
     lines = device.RunShellCommand(
         ['ls', '-a', '-l', '/data/tombstones'],
-        as_root=True, check_return=True, env=_TZ_UTC, timeout=60)
+        as_root=True, check_return=True, env=_TZ_UTC)
     for line in lines:
-      if 'tombstone' in line and not 'No such file or directory' in line:
+      if 'tombstone' in line:
         details = line.split()
         t = datetime.datetime.strptime(details[-3] + ' ' + details[-2],
                                        '%Y-%m-%d %H:%M')
         yield details[-1], t
   except device_errors.CommandFailedError:
     logging.exception('Could not retrieve tombstones.')
+  except device_errors.CommandTimeoutError:
+    logging.exception('Timed out retrieving tombstones.')
 
 
 def _GetDeviceDateTime(device):
@@ -124,8 +130,9 @@ def _ResolveSymbols(tombstone_data, include_stack, device_abi):
   stack_tool = os.path.join(os.path.dirname(__file__), '..', '..',
                             'third_party', 'android_platform', 'development',
                             'scripts', 'stack')
-  proc = subprocess.Popen([stack_tool, '--arch', arch], stdin=subprocess.PIPE,
-                          stdout=subprocess.PIPE)
+  cmd = [stack_tool, '--arch', arch, '--output-directory',
+         constants.GetOutDirectory()]
+  proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
   output = proc.communicate(input='\n'.join(tombstone_data))[0]
   for line in output.split('\n'):
     if not include_stack and 'Stack Data:' in line:
@@ -220,6 +227,7 @@ def main():
   parser.add_option('--device',
                     help='The serial number of the device. If not specified '
                          'will use all devices.')
+  parser.add_option('--blacklist-file', help='Device blacklist JSON file.')
   parser.add_option('-a', '--all-tombstones', action='store_true',
                     help="""Resolve symbols for all tombstones, rather than just
                          the most recent""")
@@ -231,12 +239,25 @@ def main():
                     default=4,
                     help='Number of jobs to use when processing multiple '
                          'crash stacks.')
+  parser.add_option('--output-directory',
+                    help='Path to the root build directory.')
   options, _ = parser.parse_args()
+
+  devil_chromium.Initialize()
+
+  blacklist = (device_blacklist.Blacklist(options.blacklist_file)
+               if options.blacklist_file
+               else None)
+
+  if options.output_directory:
+    constants.SetOutputDirectory(options.output_directory)
+  # Do an up-front test that the output directory is known.
+  constants.CheckOutputDirectory()
 
   if options.device:
     devices = [device_utils.DeviceUtils(options.device)]
   else:
-    devices = device_utils.DeviceUtils.HealthyDevices()
+    devices = device_utils.DeviceUtils.HealthyDevices(blacklist)
 
   # This must be done serially because strptime can hit a race condition if
   # used for the first time in a multithreaded environment.

@@ -467,8 +467,7 @@ void Expand::AnalyzeSignal(int16_t* random_vector) {
         correlation_length, correlation_lags, correlation_scale, -1);
 
     // Find maximizing index.
-    best_index = static_cast<size_t>(
-        WebRtcSpl_MaxIndexW32(correlation_vector2, correlation_lags));
+    best_index = WebRtcSpl_MaxIndexW32(correlation_vector2, correlation_lags);
     int32_t max_correlation = correlation_vector2[best_index];
     // Compensate index with start offset.
     best_index = best_index + start_index;
@@ -520,7 +519,7 @@ void Expand::AnalyzeSignal(int16_t* random_vector) {
     energy2 = WebRtcSpl_DotProductWithScale(vector2, vector2, expansion_length,
                                             correlation_scale);
     // Confirm that amplitude ratio sqrt(energy1 / energy2) is within 0.5 - 2.0,
-    // i.e., energy1 / energy1 is within 0.25 - 4.
+    // i.e., energy1 / energy2 is within 0.25 - 4.
     int16_t amplitude_ratio;
     if ((energy1 / 4 < energy2) && (energy1 > energy2 / 4)) {
       // Energy constraint fulfilled. Use both vectors and scale them

@@ -10,6 +10,13 @@ import("//build/config/crypto.gni")
 import("//build/config/ui.gni")
 import("../build/webrtc.gni")
 
+# Enable OpenSSL (BoringSSL) for iOS. This is covered in webrtc/supplement.gypi
+# for the GYP build.
+import("//build_overrides/webrtc.gni")
+if (is_ios && !build_with_chromium) {
+  use_openssl = true
+}
+
 config("rtc_base_config") {
   include_dirs = [
     "//third_party/jsoncpp/overrides/include",
@@ -39,16 +46,9 @@ config("openssl_config") {
   ]
 }
 
-config("nss_config") {
-  defines = [
-    "SSL_USE_NSS",
-    "HAVE_NSS_SSL_H",
-    "SSL_USE_NSS_RNG",
-  ]
-}
-
 config("ios_config") {
   libs = [
+    "AVFoundation.framework",
     "CFNetwork.framework",
 
     #"Foundation.framework",  # Already included in //build/config:default_libs.
@@ -84,15 +84,6 @@ if (is_linux && !build_with_chromium) {
       deps = [
         "//third_party/boringssl",
       ]
-    } else {
-      deps = [
-        "//net/third_party/nss/ssl:libssl",
-      ]
-
-      public_configs = [
-        "//net/third_party/nss/ssl:ssl_config",
-        "//third_party/nss:system_nss_no_ssl_config",
-      ]
     }
   }
 }
@@ -107,10 +98,12 @@ if (rtc_build_ssl == 0) {
 
 # The subset of rtc_base approved for use outside of libjingle.
 static_library("rtc_base_approved") {
+  deps = []
   configs += [ "..:common_config" ]
   public_configs = [ "..:common_inherited_config" ]
 
   sources = [
+    "array_view.h",
     "atomicops.h",
     "bitbuffer.cc",
     "bitbuffer.h",
@@ -123,8 +116,10 @@ static_library("rtc_base_approved") {
     "byteorder.h",
     "checks.cc",
     "checks.h",
+    "constructormagic.h",
     "criticalsection.cc",
     "criticalsection.h",
+    "deprecation.h",
     "event.cc",
     "event.h",
     "event_tracer.cc",
@@ -135,13 +130,19 @@ static_library("rtc_base_approved") {
     "md5.h",
     "md5digest.cc",
     "md5digest.h",
+    "optional.h",
     "platform_file.cc",
     "platform_file.h",
     "platform_thread.cc",
     "platform_thread.h",
+    "platform_thread_types.h",
+    "random.cc",
+    "random.h",
+    "refcount.h",
     "safe_conversions.h",
     "safe_conversions_impl.h",
     "scoped_ptr.h",
+    "scoped_ref_ptr.h",
     "stringencode.cc",
     "stringencode.h",
     "stringutils.cc",
@@ -159,14 +160,15 @@ static_library("rtc_base_approved") {
   ]
 
   if (build_with_chromium) {
+    # Dependency on chromium's logging (in //base).
+    deps += [ "//base:base" ]
     sources += [
-      "../overrides/webrtc/base/basictypes.h",
-      "../overrides/webrtc/base/constructormagic.h",
+      "../../webrtc_overrides/webrtc/base/logging.cc",
+      "../../webrtc_overrides/webrtc/base/logging.h",
     ]
+    include_dirs = [ "../../webrtc_overrides" ]
   } else {
     sources += [
-      "basictypes.h",
-      "constructormagic.h",
       "logging.cc",
       "logging.h",
     ]
@@ -177,7 +179,8 @@ static_library("rtc_base") {
   cflags = []
   cflags_cc = []
   libs = []
-  deps = [
+  deps = []
+  public_deps = [
     ":rtc_base_approved",
   ]
 
@@ -197,8 +200,6 @@ static_library("rtc_base") {
     "arraysize.h",
     "asyncfile.cc",
     "asyncfile.h",
-    "asynchttprequest.cc",
-    "asynchttprequest.h",
     "asyncinvoker-inl.h",
     "asyncinvoker.cc",
     "asyncinvoker.h",
@@ -216,7 +217,6 @@ static_library("rtc_base") {
     "autodetectproxy.h",
     "base64.cc",
     "base64.h",
-    "basicdefs.h",
     "common.cc",
     "common.h",
     "crc32.cc",
@@ -261,6 +261,8 @@ static_library("rtc_base") {
     "nethelpers.h",
     "network.cc",
     "network.h",
+    "networkmonitor.cc",
+    "networkmonitor.h",
     "nullsocketserver.h",
     "pathutils.cc",
     "pathutils.h",
@@ -332,25 +334,26 @@ static_library("rtc_base") {
 
   if (is_posix) {
     sources += [
+      "ifaddrs-android.h",
+      "ifaddrs_converter.cc",
       "unixfilesystem.cc",
       "unixfilesystem.h",
     ]
   }
 
   if (build_with_chromium) {
-    sources += [
-      "../overrides/webrtc/base/logging.cc",
-      "../overrides/webrtc/base/logging.h",
-    ]
-
     deps += [ "..:webrtc_common" ]
 
+    if (is_mac) {
+      sources += [ "macifaddrs_converter.cc" ]
+    }
+
     if (is_win) {
-      sources += [ "../overrides/webrtc/base/win32socketinit.cc" ]
+      sources += [ "../../webrtc_overrides/webrtc/base/win32socketinit.cc" ]
     }
 
     include_dirs = [
-      "../overrides",
+      "../../webrtc_overrides",
       "../../boringssl/src/include",
     ]
 
@@ -387,10 +390,8 @@ static_library("rtc_base") {
       "profiler.h",
       "proxyserver.cc",
       "proxyserver.h",
-      "refcount.h",
       "referencecountedsingletonfactory.h",
       "rollingaccumulator.h",
-      "scoped_ref_ptr.h",
       "scopedptrcollection.h",
       "sec_buffer.h",
       "sharedexclusivelock.cc",
@@ -497,31 +498,6 @@ static_library("rtc_base") {
       "opensslstreamadapter.cc",
       "opensslstreamadapter.h",
     ]
-  } else {
-    public_configs += [ ":nss_config" ]
-    if (rtc_build_ssl) {
-      if (build_with_chromium) {
-        deps += [ "//crypto:platform" ]
-      } else {
-        deps += [ "//net/third_party/nss/ssl:libssl" ]
-        if (is_linux) {
-          deps += [ ":linux_system_ssl" ]
-        } else {
-          deps += [
-            "//third_party/nss:nspr",
-            "//third_party/nss:nss",
-          ]
-        }
-      }
-    } else {
-      configs += [ "external_ssl_library" ]
-    }
-    sources += [
-      "nssidentity.cc",
-      "nssidentity.h",
-      "nssstreamadapter.cc",
-      "nssstreamadapter.h",
-    ]
   }
 
   if (is_android) {
@@ -537,7 +513,7 @@ static_library("rtc_base") {
   }
 
   if (is_ios) {
-    all_dependent_configs += [ ":ios_config" ]
+    all_dependent_configs = [ ":ios_config" ]
 
     sources += [
       "macconversion.cc",
@@ -586,8 +562,6 @@ static_library("rtc_base") {
 
   if (is_win) {
     sources += [
-      "schanneladapter.cc",
-      "schanneladapter.h",
       "win32.cc",
       "win32.h",
       "win32filesystem.cc",
@@ -635,4 +609,43 @@ static_library("rtc_base") {
       "linux.h",
     ]
   }
+
+  if (is_nacl) {
+    deps += [ "//native_client_sdk/src/libraries/nacl_io" ]
+    defines += [ "timezone=_timezone" ]
+    sources -= [ "ifaddrs_converter.cc" ]
+  }
+}
+
+if (is_ios) {
+  source_set("rtc_base_objc") {
+    deps = [
+      ":rtc_base",
+    ]
+    cflags = [ "-fobjc-arc" ]
+    configs += [ "..:common_config" ]
+    public_configs = [ "..:common_inherited_config" ]
+
+    sources = [
+      "objc/NSString+StdString.h",
+      "objc/NSString+StdString.mm",
+      "objc/RTCCameraPreviewView.h",
+      "objc/RTCCameraPreviewView.m",
+      "objc/RTCDispatcher.h",
+      "objc/RTCDispatcher.m",
+      "objc/RTCLogging.h",
+      "objc/RTCLogging.mm",
+      "objc/RTCMacros.h",
+      "objc/RTCSSLAdapter.h",
+      "objc/RTCSSLAdapter.mm",
+      "objc/RTCTracing.h",
+      "objc/RTCTracing.mm",
+    ]
+  }
+}
+
+source_set("gtest_prod") {
+  sources = [
+    "gtest_prod_util.h",
+  ]
 }

@@ -18,7 +18,7 @@
 #include <windows.h>
 #include <algorithm>
 
-#include "webrtc/system_wrappers/interface/utf_util_win.h"
+#include "webrtc/system_wrappers/include/utf_util_win.h"
 #define GET_CURRENT_DIR _getcwd
 #else
 #include <unistd.h>
@@ -222,6 +222,9 @@ std::string ResourcePath(std::string name, std::string extension) {
 #ifdef WEBRTC_MAC
   platform = "mac";
 #endif  // WEBRTC_MAC
+#ifdef WEBRTC_ANDROID
+  platform = "android";
+#endif  // WEBRTC_ANDROID
 
 #ifdef WEBRTC_ARCH_64_BITS
   std::string architecture = "64";

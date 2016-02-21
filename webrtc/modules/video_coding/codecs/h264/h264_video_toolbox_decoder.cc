@@ -16,7 +16,7 @@
 #include "libyuv/convert.h"
 #include "webrtc/base/checks.h"
 #include "webrtc/base/logging.h"
-#include "webrtc/common_video/interface/video_frame_buffer.h"
+#include "webrtc/common_video/include/video_frame_buffer.h"
 #include "webrtc/modules/video_coding/codecs/h264/h264_video_toolbox_nalu.h"
 #include "webrtc/video_frame.h"
 
@@ -47,19 +47,19 @@ struct FrameDecodeParams {
 // instead once the pipeline supports it.
 rtc::scoped_refptr<webrtc::VideoFrameBuffer> VideoFrameBufferForPixelBuffer(
     CVPixelBufferRef pixel_buffer) {
-  DCHECK(pixel_buffer);
-  DCHECK(CVPixelBufferGetPixelFormatType(pixel_buffer) ==
-         kCVPixelFormatType_420YpCbCr8BiPlanarFullRange);
+  RTC_DCHECK(pixel_buffer);
+  RTC_DCHECK(CVPixelBufferGetPixelFormatType(pixel_buffer) ==
+             kCVPixelFormatType_420YpCbCr8BiPlanarFullRange);
   size_t width = CVPixelBufferGetWidthOfPlane(pixel_buffer, 0);
   size_t height = CVPixelBufferGetHeightOfPlane(pixel_buffer, 0);
   // TODO(tkchin): Use a frame buffer pool.
   rtc::scoped_refptr<webrtc::VideoFrameBuffer> buffer =
       new rtc::RefCountedObject<webrtc::I420Buffer>(width, height);
   CVPixelBufferLockBaseAddress(pixel_buffer, kCVPixelBufferLock_ReadOnly);
-  const uint8* src_y = reinterpret_cast<const uint8*>(
+  const uint8_t* src_y = reinterpret_cast<const uint8_t*>(
       CVPixelBufferGetBaseAddressOfPlane(pixel_buffer, 0));
   int src_y_stride = CVPixelBufferGetBytesPerRowOfPlane(pixel_buffer, 0);
-  const uint8* src_uv = reinterpret_cast<const uint8*>(
+  const uint8_t* src_uv = reinterpret_cast<const uint8_t*>(
       CVPixelBufferGetBaseAddressOfPlane(pixel_buffer, 1));
   int src_uv_stride = CVPixelBufferGetBytesPerRowOfPlane(pixel_buffer, 1);
   int ret = libyuv::NV12ToI420(
@@ -106,8 +106,7 @@ namespace webrtc {
 H264VideoToolboxDecoder::H264VideoToolboxDecoder()
     : callback_(nullptr),
       video_format_(nullptr),
-      decompression_session_(nullptr) {
-}
+      decompression_session_(nullptr) {}
 
 H264VideoToolboxDecoder::~H264VideoToolboxDecoder() {
   DestroyDecompressionSession();
@@ -125,16 +124,15 @@ int H264VideoToolboxDecoder::Decode(
     const RTPFragmentationHeader* fragmentation,
     const CodecSpecificInfo* codec_specific_info,
     int64_t render_time_ms) {
-  DCHECK(input_image._buffer);
+  RTC_DCHECK(input_image._buffer);
 
   CMSampleBufferRef sample_buffer = nullptr;
   if (!H264AnnexBBufferToCMSampleBuffer(input_image._buffer,
-                                        input_image._length,
-                                        video_format_,
+                                        input_image._length, video_format_,
                                         &sample_buffer)) {
     return WEBRTC_VIDEO_CODEC_ERROR;
   }
-  DCHECK(sample_buffer);
+  RTC_DCHECK(sample_buffer);
   // Check if the video format has changed, and reinitialize decoder if needed.
   CMVideoFormatDescriptionRef description =
       CMSampleBufferGetFormatDescription(sample_buffer);
@@ -160,18 +158,13 @@ int H264VideoToolboxDecoder::Decode(
 
 int H264VideoToolboxDecoder::RegisterDecodeCompleteCallback(
     DecodedImageCallback* callback) {
-  DCHECK(!callback_);
+  RTC_DCHECK(!callback_);
   callback_ = callback;
   return WEBRTC_VIDEO_CODEC_OK;
 }
 
 int H264VideoToolboxDecoder::Release() {
   callback_ = nullptr;
-  return WEBRTC_VIDEO_CODEC_OK;
-}
-
-int H264VideoToolboxDecoder::Reset() {
-  ResetDecompressionSession();
   return WEBRTC_VIDEO_CODEC_OK;
 }
 
@@ -206,11 +199,8 @@ int H264VideoToolboxDecoder::ResetDecompressionSession() {
   int64_t nv12type = kCVPixelFormatType_420YpCbCr8BiPlanarFullRange;
   CFNumberRef pixel_format =
       CFNumberCreate(nullptr, kCFNumberLongType, &nv12type);
-  CFTypeRef values[attributes_size] = {
-    kCFBooleanTrue,
-    io_surface_value,
-    pixel_format
-  };
+  CFTypeRef values[attributes_size] = {kCFBooleanTrue, io_surface_value,
+                                       pixel_format};
   CFDictionaryRef attributes =
       internal::CreateCFDictionary(keys, values, attributes_size);
   if (io_surface_value) {
@@ -238,7 +228,7 @@ int H264VideoToolboxDecoder::ResetDecompressionSession() {
 }
 
 void H264VideoToolboxDecoder::ConfigureDecompressionSession() {
-  DCHECK(decompression_session_);
+  RTC_DCHECK(decompression_session_);
 #if defined(WEBRTC_IOS)
   VTSessionSetProperty(decompression_session_,
                        kVTDecompressionPropertyKey_RealTime, kCFBooleanTrue);
@@ -264,6 +254,10 @@ void H264VideoToolboxDecoder::SetVideoFormat(
   if (video_format_) {
     CFRetain(video_format_);
   }
+}
+
+const char* H264VideoToolboxDecoder::ImplementationName() const {
+  return "VideoToolbox";
 }
 
 }  // namespace webrtc

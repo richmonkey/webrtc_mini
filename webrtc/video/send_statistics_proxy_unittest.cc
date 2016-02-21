@@ -16,25 +16,27 @@
 #include <vector>
 
 #include "testing/gtest/include/gtest/gtest.h"
+#include "webrtc/test/histogram.h"
 
 namespace webrtc {
 
 class SendStatisticsProxyTest : public ::testing::Test {
  public:
   SendStatisticsProxyTest()
-      : fake_clock_(1234), avg_delay_ms_(0), max_delay_ms_(0) {}
+      : fake_clock_(1234), config_(GetTestConfig()), avg_delay_ms_(0),
+        max_delay_ms_(0) {}
   virtual ~SendStatisticsProxyTest() {}
 
  protected:
   virtual void SetUp() {
-    statistics_proxy_.reset(
-        new SendStatisticsProxy(&fake_clock_, GetTestConfig()));
-    config_ = GetTestConfig();
+    statistics_proxy_.reset(new SendStatisticsProxy(
+        &fake_clock_, GetTestConfig(),
+        VideoEncoderConfig::ContentType::kRealtimeVideo));
     expected_ = VideoSendStream::Stats();
   }
 
   VideoSendStream::Config GetTestConfig() {
-    VideoSendStream::Config config;
+    VideoSendStream::Config config(nullptr);
     config.rtp.ssrcs.push_back(17);
     config.rtp.ssrcs.push_back(42);
     config.rtp.rtx.ssrcs.push_back(18);
@@ -129,11 +131,10 @@ TEST_F(SendStatisticsProxyTest, RtcpStatistics) {
 }
 
 TEST_F(SendStatisticsProxyTest, EncodedBitrateAndFramerate) {
-  const int media_bitrate_bps = 500;
-  const int encode_fps = 29;
+  int media_bitrate_bps = 500;
+  int encode_fps = 29;
 
-  ViEEncoderObserver* encoder_observer = statistics_proxy_.get();
-  encoder_observer->OutgoingRate(0, encode_fps, media_bitrate_bps);
+  statistics_proxy_->OnOutgoingRate(encode_fps, media_bitrate_bps);
 
   VideoSendStream::Stats stats = statistics_proxy_->GetStats();
   EXPECT_EQ(media_bitrate_bps, stats.media_bitrate_bps);
@@ -145,12 +146,11 @@ TEST_F(SendStatisticsProxyTest, Suspended) {
   EXPECT_FALSE(statistics_proxy_->GetStats().suspended);
 
   // Verify that we can set it to true.
-  ViEEncoderObserver* encoder_observer = statistics_proxy_.get();
-  encoder_observer->SuspendChange(0, true);
+  statistics_proxy_->OnSuspendChange(true);
   EXPECT_TRUE(statistics_proxy_->GetStats().suspended);
 
   // Verify that we can set it back to false again.
-  encoder_observer->SuspendChange(0, false);
+  statistics_proxy_->OnSuspendChange(false);
   EXPECT_FALSE(statistics_proxy_->GetStats().suspended);
 }
 
@@ -287,6 +287,36 @@ TEST_F(SendStatisticsProxyTest, SendSideDelay) {
   }
   VideoSendStream::Stats stats = statistics_proxy_->GetStats();
   ExpectEqual(expected_, stats);
+}
+
+TEST_F(SendStatisticsProxyTest, OnEncodedFrameTimeMeasured) {
+  const int kEncodeTimeMs = 11;
+  CpuOveruseMetrics metrics;
+  metrics.encode_usage_percent = 80;
+  statistics_proxy_->OnEncodedFrameTimeMeasured(kEncodeTimeMs, metrics);
+
+  VideoSendStream::Stats stats = statistics_proxy_->GetStats();
+  EXPECT_EQ(kEncodeTimeMs, stats.avg_encode_time_ms);
+  EXPECT_EQ(metrics.encode_usage_percent, stats.encode_usage_percent);
+}
+
+TEST_F(SendStatisticsProxyTest, SwitchContentTypeUpdatesHistograms) {
+  test::ClearHistograms();
+  const int kMinRequiredSamples = 200;
+  const int kWidth = 640;
+  const int kHeight = 480;
+
+  for (int i = 0; i < kMinRequiredSamples; ++i)
+    statistics_proxy_->OnIncomingFrame(kWidth, kHeight);
+
+  // No switch, stats not should be updated.
+  statistics_proxy_->SetContentType(
+      VideoEncoderConfig::ContentType::kRealtimeVideo);
+  EXPECT_EQ(0, test::NumHistogramSamples("WebRTC.Video.InputWidthInPixels"));
+
+  // Switch to screenshare, real-time stats should be updated.
+  statistics_proxy_->SetContentType(VideoEncoderConfig::ContentType::kScreen);
+  EXPECT_EQ(1, test::NumHistogramSamples("WebRTC.Video.InputWidthInPixels"));
 }
 
 TEST_F(SendStatisticsProxyTest, NoSubstreams) {

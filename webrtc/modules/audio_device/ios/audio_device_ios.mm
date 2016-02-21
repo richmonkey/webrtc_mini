@@ -22,8 +22,8 @@
 #include "webrtc/base/criticalsection.h"
 #include "webrtc/base/logging.h"
 #include "webrtc/base/thread_annotations.h"
-#include "webrtc/modules/audio_device/ios/fine_audio_buffer.h"
-#include "webrtc/modules/utility/interface/helpers_ios.h"
+#include "webrtc/modules/audio_device/fine_audio_buffer.h"
+#include "webrtc/modules/utility/include/helpers_ios.h"
 
 namespace webrtc {
 
@@ -1035,7 +1035,7 @@ OSStatus AudioDeviceIOS::OnRecordedDataIsAvailable(
   // Simply return if recording is not enabled.
   if (!rtc::AtomicOps::AcquireLoad(&recording_))
     return result;
-  if (in_number_frames != (size_t)record_parameters_.frames_per_buffer()) {
+  if (in_number_frames != record_parameters_.frames_per_buffer()) {
     // We have seen short bursts (1-2 frames) where |in_number_frames| changes.
     // Add a log to keep track of longer sequences if that should ever happen.
     // Also return since calling AudioUnitRender in this state will only result

@@ -7,7 +7,7 @@
  *  in the file PATENTS.  All contributing project authors may
  *  be found in the AUTHORS file in the root of the source tree.
  */
-#include "webrtc/modules/video_coding/utility/include/quality_scaler.h"
+#include "webrtc/modules/video_coding/utility/quality_scaler.h"
 
 namespace webrtc {
 
@@ -26,12 +26,14 @@ QualityScaler::QualityScaler()
       downscale_shift_(0),
       framerate_down_(false),
       min_width_(kDefaultMinDownscaleDimension),
-      min_height_(kDefaultMinDownscaleDimension) {
-}
+      min_height_(kDefaultMinDownscaleDimension) {}
 
-void QualityScaler::Init(int low_qp_threshold, bool use_framerate_reduction) {
+void QualityScaler::Init(int low_qp_threshold,
+                         int high_qp_threshold,
+                         bool use_framerate_reduction) {
   ClearSamples();
   low_qp_threshold_ = low_qp_threshold;
+  high_qp_threshold_ = high_qp_threshold;
   use_framerate_reduction_ = use_framerate_reduction;
   target_framerate_ = -1;
 }
@@ -70,8 +72,10 @@ void QualityScaler::OnEncodeFrame(const VideoFrame& frame) {
 
   // When encoder consistently overshoots, framerate reduction and spatial
   // resizing will be triggered to get a smoother video.
-  if (framedrop_percent_.GetAverage(num_samples_, &avg_drop) &&
-      avg_drop >= kFramedropPercentThreshold) {
+  if ((framedrop_percent_.GetAverage(num_samples_, &avg_drop) &&
+       avg_drop >= kFramedropPercentThreshold) ||
+      (average_qp_.GetAverage(num_samples_, &avg_qp) &&
+       avg_qp > high_qp_threshold_)) {
     // Reducing frame rate before spatial resolution change.
     // Reduce frame rate only when it is above a certain number.
     // Only one reduction is allowed for now.
@@ -86,7 +90,7 @@ void QualityScaler::OnEncodeFrame(const VideoFrame& frame) {
       AdjustScale(false);
     }
   } else if (average_qp_.GetAverage(num_samples_, &avg_qp) &&
-      avg_qp <= low_qp_threshold_) {
+             avg_qp <= low_qp_threshold_) {
     if (use_framerate_reduction_ && framerate_down_) {
       target_framerate_ = -1;
       framerate_down_ = false;
@@ -99,7 +103,7 @@ void QualityScaler::OnEncodeFrame(const VideoFrame& frame) {
   assert(downscale_shift_ >= 0);
   for (int shift = downscale_shift_;
        shift > 0 && (res_.width / 2 >= min_width_) &&
-           (res_.height / 2 >= min_height_);
+       (res_.height / 2 >= min_height_);
        --shift) {
     res_.width /= 2;
     res_.height /= 2;
@@ -119,13 +123,8 @@ const VideoFrame& QualityScaler::GetScaledFrame(const VideoFrame& frame) {
   if (res.width == frame.width())
     return frame;
 
-  scaler_.Set(frame.width(),
-              frame.height(),
-              res.width,
-              res.height,
-              kI420,
-              kI420,
-              kScaleBox);
+  scaler_.Set(frame.width(), frame.height(), res.width, res.height, kI420,
+              kI420, kScaleBox);
   if (scaler_.Scale(frame, &scaled_frame_) != 0)
     return frame;
 

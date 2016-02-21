@@ -15,7 +15,7 @@
 #include <sstream>
 
 #include "webrtc/base/checks.h"
-#include "webrtc/modules/interface/module_common_types.h"
+#include "webrtc/modules/include/module_common_types.h"
 #include "webrtc/modules/remote_bitrate_estimator/test/bwe.h"
 #include "webrtc/modules/remote_bitrate_estimator/test/metric_recorder.h"
 
@@ -209,7 +209,7 @@ void PacedVideoSender::RunFor(int64_t time_ms, Packets* in_out) {
     if (!generated_packets.empty()) {
       for (Packet* packet : generated_packets) {
         MediaPacket* media_packet = static_cast<MediaPacket*>(packet);
-        pacer_.SendPacket(
+        pacer_.InsertPacket(
             PacedSender::kNormalPriority, media_packet->header().ssrc,
             media_packet->header().sequenceNumber, media_packet->send_time_ms(),
             media_packet->payload_size(), false);
@@ -271,6 +271,8 @@ void PacedVideoSender::QueuePackets(Packets* batch,
   }
   Packets to_transfer;
   to_transfer.splice(to_transfer.begin(), queue_, queue_.begin(), it);
+  for (Packet* packet : to_transfer)
+    packet->set_paced(true);
   bwe_->OnPacketsSent(to_transfer);
   batch->merge(to_transfer, DereferencingComparator<Packet>);
 }
@@ -400,7 +402,7 @@ void TcpSender::SendPackets(Packets* in_out) {
 
 void TcpSender::UpdateCongestionControl(const FeedbackPacket* fb) {
   const TcpFeedback* tcp_fb = static_cast<const TcpFeedback*>(fb);
-  DCHECK(!tcp_fb->acked_packets().empty());
+  RTC_DCHECK(!tcp_fb->acked_packets().empty());
   ack_received_ = true;
 
   uint16_t expected = tcp_fb->acked_packets().back() - last_acked_seq_num_;

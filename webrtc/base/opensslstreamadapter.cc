@@ -43,21 +43,23 @@ namespace rtc {
 #endif
 
 #ifdef HAVE_DTLS_SRTP
-// SRTP cipher suite table
+// SRTP cipher suite table. |internal_name| is used to construct a
+// colon-separated profile strings which is needed by
+// SSL_CTX_set_tlsext_use_srtp().
 struct SrtpCipherMapEntry {
-  const char* external_name;
   const char* internal_name;
+  const int id;
 };
 
 // This isn't elegant, but it's better than an external reference
 static SrtpCipherMapEntry SrtpCipherMap[] = {
-  {"AES_CM_128_HMAC_SHA1_80", "SRTP_AES128_CM_SHA1_80"},
-  {"AES_CM_128_HMAC_SHA1_32", "SRTP_AES128_CM_SHA1_32"},
-  {NULL, NULL}
-};
+    {"SRTP_AES128_CM_SHA1_80", SRTP_AES128_CM_SHA1_80},
+    {"SRTP_AES128_CM_SHA1_32", SRTP_AES128_CM_SHA1_32},
+    {nullptr, 0}};
 #endif
 
 #ifndef OPENSSL_IS_BORINGSSL
+
 // Cipher name table. Maps internal OpenSSL cipher ids to the RFC name.
 struct SslCipherMapEntry {
   uint32_t openssl_id;
@@ -139,31 +141,60 @@ static const SslCipherMapEntry kSslCipherMap[] = {
 };
 #endif  // #ifndef OPENSSL_IS_BORINGSSL
 
+#if defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable : 4309)
+#pragma warning(disable : 4310)
+#endif  // defined(_MSC_VER)
+
 // Default cipher used between OpenSSL/BoringSSL stream adapters.
 // This needs to be updated when the default of the SSL library changes.
-static const char kDefaultSslCipher10[] =
-    "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA";
-static const char kDefaultSslEcCipher10[] =
-    "TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA";
-
+// static_cast<uint16_t> causes build warnings on windows platform.
+static int kDefaultSslCipher10 =
+    static_cast<uint16_t>(TLS1_CK_ECDHE_RSA_WITH_AES_256_CBC_SHA);
+static int kDefaultSslEcCipher10 =
+    static_cast<uint16_t>(TLS1_CK_ECDHE_ECDSA_WITH_AES_256_CBC_SHA);
 #ifdef OPENSSL_IS_BORINGSSL
-static const char kDefaultSslCipher12[] =
-    "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256";
-static const char kDefaultSslEcCipher12[] =
-    "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256";
+static int kDefaultSslCipher12 =
+    static_cast<uint16_t>(TLS1_CK_ECDHE_RSA_WITH_AES_128_GCM_SHA256);
+static int kDefaultSslEcCipher12 =
+    static_cast<uint16_t>(TLS1_CK_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256);
 // Fallback cipher for DTLS 1.2 if hardware-accelerated AES-GCM is unavailable.
-static const char kDefaultSslCipher12NoAesGcm[] =
-    "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256";
-static const char kDefaultSslEcCipher12NoAesGcm[] =
-    "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256";
+
+#ifdef TLS1_CK_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256
+// This ciphersuite was added in boringssl 13414b3a..., changing the fallback
+// ciphersuite.  For compatibility during a transitional period, support old
+// boringssl versions.  TODO(torbjorng): Remove this.
+static int kDefaultSslCipher12NoAesGcm =
+    static_cast<uint16_t>(TLS1_CK_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256);
+#else
+static int kDefaultSslCipher12NoAesGcm =
+    static_cast<uint16_t>(TLS1_CK_ECDHE_RSA_CHACHA20_POLY1305_OLD);
+#endif
+
+#ifdef TLS1_CK_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256
+// This ciphersuite was added in boringssl 13414b3a..., changing the fallback
+// ciphersuite.  For compatibility during a transitional period, support old
+// boringssl versions.  TODO(torbjorng): Remove this.
+static int kDefaultSslEcCipher12NoAesGcm =
+    static_cast<uint16_t>(TLS1_CK_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256);
+#else
+static int kDefaultSslEcCipher12NoAesGcm =
+    static_cast<uint16_t>(TLS1_CK_ECDHE_ECDSA_CHACHA20_POLY1305_OLD);
+#endif
+
 #else  // !OPENSSL_IS_BORINGSSL
 // OpenSSL sorts differently than BoringSSL, so the default cipher doesn't
 // change between TLS 1.0 and TLS 1.2 with the current setup.
-static const char kDefaultSslCipher12[] =
-    "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA";
-static const char kDefaultSslEcCipher12[] =
-    "TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA";
-#endif
+static int kDefaultSslCipher12 =
+    static_cast<uint16_t>(TLS1_CK_ECDHE_RSA_WITH_AES_256_CBC_SHA);
+static int kDefaultSslEcCipher12 =
+    static_cast<uint16_t>(TLS1_CK_ECDHE_ECDSA_WITH_AES_256_CBC_SHA);
+#endif  // OPENSSL_IS_BORINGSSL
+
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif  // defined(_MSC_VER)
 
 //////////////////////////////////////////////////////////////////////
 // StreamBIO
@@ -287,12 +318,13 @@ OpenSSLStreamAdapter::OpenSSLStreamAdapter(StreamInterface* stream)
     : SSLStreamAdapter(stream),
       state_(SSL_NONE),
       role_(SSL_CLIENT),
-      ssl_read_needs_write_(false), ssl_write_needs_read_(false),
-      ssl_(NULL), ssl_ctx_(NULL),
+      ssl_read_needs_write_(false),
+      ssl_write_needs_read_(false),
+      ssl_(NULL),
+      ssl_ctx_(NULL),
       custom_verification_succeeded_(false),
       ssl_mode_(SSL_MODE_TLS),
-      ssl_max_version_(SSL_PROTOCOL_TLS_11) {
-}
+      ssl_max_version_(SSL_PROTOCOL_TLS_12) {}
 
 OpenSSLStreamAdapter::~OpenSSLStreamAdapter() {
   Cleanup();
@@ -338,21 +370,28 @@ bool OpenSSLStreamAdapter::SetPeerCertificateDigest(const std::string
   return true;
 }
 
-#ifndef OPENSSL_IS_BORINGSSL
-const char* OpenSSLStreamAdapter::GetRfcSslCipherName(
-    const SSL_CIPHER* cipher) {
-  ASSERT(cipher != NULL);
+std::string OpenSSLStreamAdapter::SslCipherSuiteToName(int cipher_suite) {
+#ifdef OPENSSL_IS_BORINGSSL
+  const SSL_CIPHER* ssl_cipher = SSL_get_cipher_by_value(cipher_suite);
+  if (!ssl_cipher) {
+    return std::string();
+  }
+  char* cipher_name = SSL_CIPHER_get_rfc_name(ssl_cipher);
+  std::string rfc_name = std::string(cipher_name);
+  OPENSSL_free(cipher_name);
+  return rfc_name;
+#else
   for (const SslCipherMapEntry* entry = kSslCipherMap; entry->rfc_name;
        ++entry) {
-    if (cipher->id == entry->openssl_id) {
+    if (cipher_suite == static_cast<int>(entry->openssl_id)) {
       return entry->rfc_name;
     }
   }
-  return NULL;
-}
+  return std::string();
 #endif
+}
 
-bool OpenSSLStreamAdapter::GetSslCipher(std::string* cipher) {
+bool OpenSSLStreamAdapter::GetSslCipherSuite(int* cipher_suite) {
   if (state_ != SSL_CONNECTED)
     return false;
 
@@ -361,35 +400,22 @@ bool OpenSSLStreamAdapter::GetSslCipher(std::string* cipher) {
     return false;
   }
 
-#ifdef OPENSSL_IS_BORINGSSL
-  char* cipher_name = SSL_CIPHER_get_rfc_name(current_cipher);
-#else
-  const char* cipher_name = GetRfcSslCipherName(current_cipher);
-#endif
-  if (cipher_name == NULL) {
-    return false;
-  }
-
-  *cipher = cipher_name;
-#ifdef OPENSSL_IS_BORINGSSL
-  OPENSSL_free(cipher_name);
-#endif
+  *cipher_suite = static_cast<uint16_t>(SSL_CIPHER_get_id(current_cipher));
   return true;
 }
 
 // Key Extractor interface
 bool OpenSSLStreamAdapter::ExportKeyingMaterial(const std::string& label,
-                                                const uint8* context,
+                                                const uint8_t* context,
                                                 size_t context_len,
                                                 bool use_context,
-                                                uint8* result,
+                                                uint8_t* result,
                                                 size_t result_len) {
 #ifdef HAVE_DTLS_SRTP
   int i;
 
-  i = SSL_export_keying_material(ssl_, result, result_len,
-                                 label.c_str(), label.length(),
-                                 const_cast<uint8 *>(context),
+  i = SSL_export_keying_material(ssl_, result, result_len, label.c_str(),
+                                 label.length(), const_cast<uint8_t*>(context),
                                  context_len, use_context);
 
   if (i != 1)
@@ -401,20 +427,20 @@ bool OpenSSLStreamAdapter::ExportKeyingMaterial(const std::string& label,
 #endif
 }
 
-bool OpenSSLStreamAdapter::SetDtlsSrtpCiphers(
-    const std::vector<std::string>& ciphers) {
+bool OpenSSLStreamAdapter::SetDtlsSrtpCryptoSuites(
+    const std::vector<int>& ciphers) {
 #ifdef HAVE_DTLS_SRTP
   std::string internal_ciphers;
 
   if (state_ != SSL_NONE)
     return false;
 
-  for (std::vector<std::string>::const_iterator cipher = ciphers.begin();
+  for (std::vector<int>::const_iterator cipher = ciphers.begin();
        cipher != ciphers.end(); ++cipher) {
     bool found = false;
-    for (SrtpCipherMapEntry *entry = SrtpCipherMap; entry->internal_name;
+    for (SrtpCipherMapEntry* entry = SrtpCipherMap; entry->internal_name;
          ++entry) {
-      if (*cipher == entry->external_name) {
+      if (*cipher == entry->id) {
         found = true;
         if (!internal_ciphers.empty())
           internal_ciphers += ":";
@@ -439,7 +465,7 @@ bool OpenSSLStreamAdapter::SetDtlsSrtpCiphers(
 #endif
 }
 
-bool OpenSSLStreamAdapter::GetDtlsSrtpCipher(std::string* cipher) {
+bool OpenSSLStreamAdapter::GetDtlsSrtpCryptoSuite(int* crypto_suite) {
 #ifdef HAVE_DTLS_SRTP
   ASSERT(state_ == SSL_CONNECTED);
   if (state_ != SSL_CONNECTED)
@@ -451,17 +477,9 @@ bool OpenSSLStreamAdapter::GetDtlsSrtpCipher(std::string* cipher) {
   if (!srtp_profile)
     return false;
 
-  for (SrtpCipherMapEntry *entry = SrtpCipherMap;
-       entry->internal_name; ++entry) {
-    if (!strcmp(entry->internal_name, srtp_profile->name)) {
-      *cipher = entry->external_name;
-      return true;
-    }
-  }
-
-  ASSERT(false);  // This should never happen
-
-  return false;
+  *crypto_suite = srtp_profile->id;
+  ASSERT(!SrtpCryptoSuiteToName(*crypto_suite).empty());
+  return true;
 #else
   return false;
 #endif
@@ -990,7 +1008,7 @@ SSL_CTX* OpenSSLStreamAdapter::SetupSSLContext() {
     return NULL;
   }
 
-#ifdef _DEBUG
+#if !defined(NDEBUG)
   SSL_CTX_set_info_callback(ctx, OpenSSLAdapter::SSLInfoCallback);
 #endif
 
@@ -1041,7 +1059,7 @@ int OpenSSLStreamAdapter::SSLVerifyCallback(int ok, X509_STORE_CTX* store) {
   // the digest.
   //
   // TODO(jiayl): Verify the chain is a proper chain and report the chain to
-  // |stream->peer_certificate_|, like what NSS does.
+  // |stream->peer_certificate_|.
   if (depth > 0) {
     LOG(LS_INFO) << "Ignored chained certificate at depth " << depth;
     return 1;
@@ -1125,9 +1143,8 @@ bool OpenSSLStreamAdapter::HaveExporter() {
 #endif
 }
 
-std::string OpenSSLStreamAdapter::GetDefaultSslCipher(
-    SSLProtocolVersion version,
-    KeyType key_type) {
+int OpenSSLStreamAdapter::GetDefaultSslCipherForTest(SSLProtocolVersion version,
+                                                     KeyType key_type) {
   if (key_type == KT_RSA) {
     switch (version) {
       case SSL_PROTOCOL_TLS_10:
@@ -1163,7 +1180,8 @@ std::string OpenSSLStreamAdapter::GetDefaultSslCipher(
 #endif
     }
   } else {
-    return std::string();
+    RTC_NOTREACHED();
+    return kDefaultSslEcCipher12;
   }
 }
 

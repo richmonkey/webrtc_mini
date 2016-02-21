@@ -9,7 +9,7 @@
  */
 
 #include "webrtc/modules/utility/source/file_player_impl.h"
-#include "webrtc/system_wrappers/interface/logging.h"
+#include "webrtc/system_wrappers/include/logging.h"
 
 namespace webrtc {
 FilePlayer* FilePlayer::CreateFilePlayer(uint32_t instanceID,
@@ -389,7 +389,7 @@ int32_t FilePlayerImpl::SetUpAudioDecoder()
         return -1;
     }
     if( STR_CASE_CMP(_codec.plname, "L16") != 0 &&
-        _audioDecoder.SetDecodeCodec(_codec,AMRFileStorage) == -1)
+        _audioDecoder.SetDecodeCodec(_codec) == -1)
     {
         LOG(LS_WARNING) << "SetUpAudioDecoder() codec " << _codec.plname
                         << " not supported.";

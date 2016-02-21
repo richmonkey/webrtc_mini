@@ -8,12 +8,12 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
+#include <memory>
 #include <vector>
 
 #include "testing/gtest/include/gtest/gtest.h"
-#include "webrtc/base/scoped_ptr.h"
 #include "webrtc/common_audio/vad/mock/mock_vad.h"
-#include "webrtc/modules/audio_coding/codecs/cng/include/audio_encoder_cng.h"
+#include "webrtc/modules/audio_coding/codecs/cng/audio_encoder_cng.h"
 #include "webrtc/modules/audio_coding/codecs/mock/mock_audio_encoder.h"
 
 using ::testing::Return;
@@ -34,7 +34,7 @@ static const int kCngPayloadType = 18;
 class AudioEncoderCngTest : public ::testing::Test {
  protected:
   AudioEncoderCngTest()
-      : mock_vad_(new MockVad(Vad::kVadNormal)),
+      : mock_vad_(new MockVad),
         timestamp_(4711),
         num_audio_samples_10ms_(0),
         sample_rate_hz_(8000) {
@@ -75,8 +75,10 @@ class AudioEncoderCngTest : public ::testing::Test {
 
   void Encode() {
     ASSERT_TRUE(cng_) << "Must call CreateCng() first.";
-    encoded_info_ = cng_->Encode(timestamp_, audio_, num_audio_samples_10ms_,
-                                 encoded_.size(), &encoded_[0]);
+    encoded_info_ = cng_->Encode(
+        timestamp_,
+        rtc::ArrayView<const int16_t>(audio_, num_audio_samples_10ms_),
+        encoded_.size(), &encoded_[0]);
     timestamp_ += static_cast<uint32_t>(num_audio_samples_10ms_);
   }
 
@@ -183,7 +185,7 @@ class AudioEncoderCngTest : public ::testing::Test {
   }
 
   AudioEncoderCng::Config config_;
-  rtc::scoped_ptr<AudioEncoderCng> cng_;
+  std::unique_ptr<AudioEncoderCng> cng_;
   MockAudioEncoder mock_encoder_;
   MockVad* mock_vad_;  // Ownership is transferred to |cng_|.
   uint32_t timestamp_;
@@ -384,6 +386,14 @@ TEST_F(AudioEncoderCngTest, VerifySidFrameAfterSpeech) {
   EXPECT_EQ(kCngPayloadType, encoded_info_.payload_type);
   EXPECT_EQ(static_cast<size_t>(config_.num_cng_coefficients) + 1,
             encoded_info_.encoded_bytes);
+}
+
+// Resetting the CNG should reset both the VAD and the encoder.
+TEST_F(AudioEncoderCngTest, Reset) {
+  CreateCng();
+  EXPECT_CALL(mock_encoder_, Reset()).Times(1);
+  EXPECT_CALL(*mock_vad_, Reset()).Times(1);
+  cng_->Reset();
 }
 
 #if GTEST_HAS_DEATH_TEST && !defined(WEBRTC_ANDROID)

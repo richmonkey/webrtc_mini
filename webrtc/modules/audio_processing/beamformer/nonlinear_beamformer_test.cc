@@ -12,6 +12,7 @@
 
 #include "gflags/gflags.h"
 #include "webrtc/base/checks.h"
+#include "webrtc/base/format_macros.h"
 #include "webrtc/common_audio/channel_buffer.h"
 #include "webrtc/common_audio/wav_file.h"
 #include "webrtc/modules/audio_processing/beamformer/nonlinear_beamformer.h"
@@ -47,14 +48,14 @@ int main(int argc, char* argv[]) {
   const size_t num_mics = in_file.num_channels();
   const std::vector<Point> array_geometry =
       ParseArrayGeometry(FLAGS_mic_positions, num_mics);
-  CHECK_EQ(array_geometry.size(), num_mics);
+  RTC_CHECK_EQ(array_geometry.size(), num_mics);
 
   NonlinearBeamformer bf(array_geometry);
   bf.Initialize(kChunkSizeMs, in_file.sample_rate());
 
-  printf("Input file: %s\nChannels: %d, Sample rate: %d Hz\n\n",
+  printf("Input file: %s\nChannels: %" PRIuS ", Sample rate: %d Hz\n\n",
          FLAGS_i.c_str(), in_file.num_channels(), in_file.sample_rate());
-  printf("Output file: %s\nChannels: %d, Sample rate: %d Hz\n\n",
+  printf("Output file: %s\nChannels: %" PRIuS ", Sample rate: %d Hz\n\n",
          FLAGS_o.c_str(), out_file.num_channels(), out_file.sample_rate());
 
   ChannelBuffer<float> in_buf(

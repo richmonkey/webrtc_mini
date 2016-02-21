@@ -389,6 +389,30 @@ TEST(RtcpPacketTest, TransportFeedback_Limits) {
       1, kMaxNegativeTimeDelta - TransportFeedback::kDeltaScaleFactor));
   EXPECT_TRUE(packet->WithReceivedPacket(1, kMaxNegativeTimeDelta));
 
+  // Base time at maximum value.
+  int64_t kMaxBaseTime =
+      static_cast<int64_t>(TransportFeedback::kDeltaScaleFactor) * (1L << 8) *
+      ((1L << 23) - 1);
+  packet.reset(new TransportFeedback());
+  packet->WithBase(0, kMaxBaseTime);
+  packet->WithReceivedPacket(0, kMaxBaseTime);
+  // Serialize and de-serialize (verify 24bit parsing).
+  rtc::scoped_ptr<rtcp::RawPacket> raw_packet = packet->Build();
+  packet =
+      TransportFeedback::ParseFrom(raw_packet->Buffer(), raw_packet->Length());
+  EXPECT_EQ(kMaxBaseTime, packet->GetBaseTimeUs());
+
+  // Base time above maximum value.
+  int64_t kTooLargeBaseTime =
+      kMaxBaseTime + (TransportFeedback::kDeltaScaleFactor * (1L << 8));
+  packet.reset(new TransportFeedback());
+  packet->WithBase(0, kTooLargeBaseTime);
+  packet->WithReceivedPacket(0, kTooLargeBaseTime);
+  raw_packet = packet->Build();
+  packet =
+      TransportFeedback::ParseFrom(raw_packet->Buffer(), raw_packet->Length());
+  EXPECT_NE(kTooLargeBaseTime, packet->GetBaseTimeUs());
+
   // TODO(sprang): Once we support max length lower than RTCP length limit,
   // add back test for max size in bytes.
 }
@@ -428,6 +452,30 @@ TEST(RtcpPacketTest, TransportFeedback_Padding) {
       TransportFeedback::ParseFrom(mod_buffer, kExpectedSizeWithPadding));
   ASSERT_TRUE(parsed_packet.get() != nullptr);
   EXPECT_EQ(kExpectedSizeWords * 4, packet->Length());  // Padding not included.
+}
+
+TEST(RtcpPacketTest, TransportFeedback_CorrectlySplitsVectorChunks) {
+  const int kOneBitVectorCapacity = 14;
+  const int64_t kLargeTimeDelta =
+      TransportFeedback::kDeltaScaleFactor * (1 << 8);
+
+  // Test that a number of small deltas followed by a large delta results in a
+  // correct split into multiple chunks, as needed.
+
+  for (int deltas = 0; deltas <= kOneBitVectorCapacity + 1; ++deltas) {
+    TransportFeedback feedback;
+    feedback.WithBase(0, 0);
+    for (int i = 0; i < deltas; ++i)
+      feedback.WithReceivedPacket(i, i * 1000);
+    feedback.WithReceivedPacket(deltas, deltas * 1000 + kLargeTimeDelta);
+
+    rtc::scoped_ptr<rtcp::RawPacket> serialized_packet = feedback.Build();
+    EXPECT_TRUE(serialized_packet.get() != nullptr);
+    rtc::scoped_ptr<TransportFeedback> deserialized_packet =
+        TransportFeedback::ParseFrom(serialized_packet->Buffer(),
+                                     serialized_packet->Length());
+    EXPECT_TRUE(deserialized_packet.get() != nullptr);
+  }
 }
 
 }  // namespace

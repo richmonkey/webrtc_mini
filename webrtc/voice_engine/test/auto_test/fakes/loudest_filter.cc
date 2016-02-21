@@ -14,7 +14,7 @@
 
 namespace voetest {
 
-void LoudestFilter::RemoveTimeoutStreams(uint32 time_ms) {
+void LoudestFilter::RemoveTimeoutStreams(uint32_t time_ms) {
   auto it = stream_levels_.begin();
   while (it != stream_levels_.end()) {
     if (rtc::TimeDiff(time_ms, it->second.last_time_ms) >
@@ -41,7 +41,7 @@ unsigned int LoudestFilter::FindQuietestStream() {
 }
 
 bool LoudestFilter::ForwardThisPacket(const webrtc::RTPHeader& rtp_header) {
-  uint32 time_now_ms = rtc::Time();
+  uint32_t time_now_ms = rtc::Time();
   RemoveTimeoutStreams(time_now_ms);
 
   int source_ssrc = rtp_header.ssrc;
@@ -68,7 +68,7 @@ bool LoudestFilter::ForwardThisPacket(const webrtc::RTPHeader& rtp_header) {
   }
 
   unsigned int quietest_ssrc = FindQuietestStream();
-  CHECK_NE(0u, quietest_ssrc);
+  RTC_CHECK_NE(0u, quietest_ssrc);
   // A smaller value if audio level corresponds to a louder sound.
   if (audio_level < stream_levels_[quietest_ssrc].audio_level) {
     stream_levels_.erase(quietest_ssrc);

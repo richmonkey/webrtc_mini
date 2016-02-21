@@ -9,14 +9,12 @@
  */
 
 #include "webrtc/modules/video_capture/video_capture_impl.h"
-#include "webrtc/system_wrappers/interface/ref_count.h"
+#include "webrtc/system_wrappers/include/ref_count.h"
 
 namespace webrtc {
 
 namespace videocapturemodule {
 
-//避免重定义
-#ifndef ANDROID
 VideoCaptureModule* VideoCaptureImpl::Create(
     const int32_t id,
     const char* deviceUniqueIdUTF8) {
@@ -24,7 +22,7 @@ VideoCaptureModule* VideoCaptureImpl::Create(
       new RefCountImpl<VideoCaptureImpl>(id);
   return implementation;
 }
-#endif
+
 }  // namespace videocapturemodule
 
 }  // namespace webrtc

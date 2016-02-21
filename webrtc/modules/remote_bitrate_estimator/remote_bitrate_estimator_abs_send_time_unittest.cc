@@ -17,44 +17,41 @@ namespace webrtc {
 class RemoteBitrateEstimatorAbsSendTimeTest :
     public RemoteBitrateEstimatorTest {
  public:
-  static const uint32_t kRemoteBitrateEstimatorMinBitrateBps = 30000;
-
   RemoteBitrateEstimatorAbsSendTimeTest() {}
   virtual void SetUp() {
     bitrate_estimator_.reset(new RemoteBitrateEstimatorAbsSendTime(
-        bitrate_observer_.get(), &clock_,
-        kRemoteBitrateEstimatorMinBitrateBps));
+        bitrate_observer_.get(), &clock_));
   }
  protected:
-  DISALLOW_COPY_AND_ASSIGN(RemoteBitrateEstimatorAbsSendTimeTest);
+  RTC_DISALLOW_COPY_AND_ASSIGN(RemoteBitrateEstimatorAbsSendTimeTest);
 };
 
 TEST_F(RemoteBitrateEstimatorAbsSendTimeTest, InitialBehavior) {
-  InitialBehaviorTestHelper(508017);
+  InitialBehaviorTestHelper(674840);
 }
 
 TEST_F(RemoteBitrateEstimatorAbsSendTimeTest, RateIncreaseReordering) {
-  RateIncreaseReorderingTestHelper(506422);
+  RateIncreaseReorderingTestHelper(674840);
 }
 
 TEST_F(RemoteBitrateEstimatorAbsSendTimeTest, RateIncreaseRtpTimestamps) {
-  RateIncreaseRtpTimestampsTestHelper(1240);
+  RateIncreaseRtpTimestampsTestHelper(1232);
 }
 
 TEST_F(RemoteBitrateEstimatorAbsSendTimeTest, CapacityDropOneStream) {
-  CapacityDropTestHelper(1, false, 600);
+  CapacityDropTestHelper(1, false, 700);
 }
 
 TEST_F(RemoteBitrateEstimatorAbsSendTimeTest, CapacityDropOneStreamWrap) {
-  CapacityDropTestHelper(1, true, 600);
+  CapacityDropTestHelper(1, true, 700);
 }
 
 TEST_F(RemoteBitrateEstimatorAbsSendTimeTest, CapacityDropTwoStreamsWrap) {
-  CapacityDropTestHelper(2, true, 533);
+  CapacityDropTestHelper(2, true, 633);
 }
 
 TEST_F(RemoteBitrateEstimatorAbsSendTimeTest, CapacityDropThreeStreamsWrap) {
-  CapacityDropTestHelper(3, true, 700);
+  CapacityDropTestHelper(3, true, 633);
 }
 
 TEST_F(RemoteBitrateEstimatorAbsSendTimeTest, CapacityDropThirteenStreamsWrap) {
@@ -62,19 +59,15 @@ TEST_F(RemoteBitrateEstimatorAbsSendTimeTest, CapacityDropThirteenStreamsWrap) {
 }
 
 TEST_F(RemoteBitrateEstimatorAbsSendTimeTest, CapacityDropNineteenStreamsWrap) {
-  CapacityDropTestHelper(19, true, 700);
+  CapacityDropTestHelper(19, true, 667);
 }
 
 TEST_F(RemoteBitrateEstimatorAbsSendTimeTest, CapacityDropThirtyStreamsWrap) {
-  CapacityDropTestHelper(30, true, 700);
+  CapacityDropTestHelper(30, true, 667);
 }
 
 TEST_F(RemoteBitrateEstimatorAbsSendTimeTest, TestTimestampGrouping) {
   TestTimestampGroupingTestHelper();
-}
-
-TEST_F(RemoteBitrateEstimatorAbsSendTimeTest, TestGetStats) {
-  TestGetStatsHelper();
 }
 
 TEST_F(RemoteBitrateEstimatorAbsSendTimeTest, TestShortTimeoutAndWrap) {

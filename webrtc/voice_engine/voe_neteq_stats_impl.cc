@@ -10,9 +10,8 @@
 
 #include "webrtc/voice_engine/voe_neteq_stats_impl.h"
 
-#include "webrtc/modules/audio_coding/main/interface/audio_coding_module.h"
-#include "webrtc/system_wrappers/interface/critical_section_wrapper.h"
-#include "webrtc/system_wrappers/interface/trace.h"
+#include "webrtc/modules/audio_coding/include/audio_coding_module.h"
+#include "webrtc/system_wrappers/include/trace.h"
 #include "webrtc/voice_engine/channel.h"
 #include "webrtc/voice_engine/include/voe_errors.h"
 #include "webrtc/voice_engine/voice_engine_impl.h"
@@ -47,9 +46,6 @@ VoENetEqStatsImpl::~VoENetEqStatsImpl() {
 
 int VoENetEqStatsImpl::GetNetworkStatistics(int channel,
                                             NetworkStatistics& stats) {
-  WEBRTC_TRACE(kTraceApiCall, kTraceVoice, VoEId(_shared->instance_id(), -1),
-               "GetNetworkStatistics(channel=%d, stats=?)", channel);
-
   if (!_shared->statistics().Initialized()) {
     _shared->SetLastError(VE_NOT_INITED, kTraceError);
     return -1;

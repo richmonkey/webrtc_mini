@@ -11,7 +11,7 @@
 #include "webrtc/modules/desktop_capture/cropping_window_capturer.h"
 
 #include "webrtc/modules/desktop_capture/cropped_desktop_frame.h"
-#include "webrtc/system_wrappers/interface/logging.h"
+#include "webrtc/system_wrappers/include/logging.h"
 
 namespace webrtc {
 
@@ -29,6 +29,11 @@ CroppingWindowCapturer::~CroppingWindowCapturer() {}
 void CroppingWindowCapturer::Start(DesktopCapturer::Callback* callback) {
   callback_ = callback;
   window_capturer_->Start(callback);
+}
+
+void CroppingWindowCapturer::SetSharedMemoryFactory(
+    rtc::scoped_ptr<SharedMemoryFactory> shared_memory_factory) {
+  window_capturer_->SetSharedMemoryFactory(std::move(shared_memory_factory));
 }
 
 void CroppingWindowCapturer::Capture(const DesktopRegion& region) {
@@ -67,10 +72,6 @@ bool CroppingWindowCapturer::SelectWindow(WindowId id) {
 
 bool CroppingWindowCapturer::BringSelectedWindowToFront() {
   return window_capturer_->BringSelectedWindowToFront();
-}
-
-SharedMemory* CroppingWindowCapturer::CreateSharedMemory(size_t size) {
-  return callback_->CreateSharedMemory(size);
 }
 
 void CroppingWindowCapturer::OnCaptureCompleted(DesktopFrame* frame) {

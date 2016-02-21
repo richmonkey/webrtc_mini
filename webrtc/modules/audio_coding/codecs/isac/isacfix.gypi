@@ -17,21 +17,23 @@
         'isac_common',
       ],
       'include_dirs': [
-        'fix/interface',
+        'fix/include',
         '<(webrtc_root)'
       ],
       'direct_dependent_settings': {
         'include_dirs': [
-          'fix/interface',
+          'fix/include',
           '<(webrtc_root)',
         ],
       },
       'sources': [
-        'fix/interface/audio_encoder_isacfix.h',
-        'fix/interface/isacfix.h',
+        'fix/include/audio_decoder_isacfix.h',
+        'fix/include/audio_encoder_isacfix.h',
+        'fix/include/isacfix.h',
         'fix/source/arith_routines.c',
         'fix/source/arith_routines_hist.c',
         'fix/source/arith_routines_logist.c',
+        'fix/source/audio_decoder_isacfix.cc',
         'fix/source/audio_encoder_isacfix.cc',
         'fix/source/bandwidth_estimator.c',
         'fix/source/decode.c',
@@ -44,6 +46,7 @@
         'fix/source/filterbanks.c',
         'fix/source/filters.c',
         'fix/source/initialize.c',
+        'fix/source/isac_fix_type.h',
         'fix/source/isacfix.c',
         'fix/source/lattice.c',
         'fix/source/lattice_c.c',
@@ -74,11 +77,6 @@
         'fix/source/structs.h',
       ],
       'conditions': [
-        ['OS!="win"', {
-          'defines': [
-            'WEBRTC_LINUX',
-          ],
-        }],
         ['target_arch=="arm" and arm_version>=7', {
           'sources': [
             'fix/source/lattice_armv7.S',

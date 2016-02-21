@@ -17,7 +17,7 @@
 #include "webrtc/modules/bitrate_controller/include/bitrate_controller.h"
 #include "webrtc/modules/remote_bitrate_estimator/remote_bitrate_estimator_abs_send_time.h"
 #include "webrtc/modules/remote_bitrate_estimator/test/bwe_test_logging.h"
-#include "webrtc/modules/rtp_rtcp/interface/receive_statistics.h"
+#include "webrtc/modules/rtp_rtcp/include/receive_statistics.h"
 
 namespace webrtc {
 namespace testing {
@@ -69,15 +69,13 @@ RembReceiver::RembReceiver(int flow_id, bool plot)
       recv_stats_(ReceiveStatistics::Create(&clock_)),
       latest_estimate_bps_(-1),
       last_feedback_ms_(-1),
-      estimator_(new RemoteBitrateEstimatorAbsSendTime(
-          this,
-          &clock_,
-          kRemoteBitrateEstimatorMinBitrateBps)) {
+      estimator_(new RemoteBitrateEstimatorAbsSendTime(this, &clock_)) {
   std::stringstream ss;
   ss << "Estimate_" << flow_id_ << "#1";
   estimate_log_prefix_ = ss.str();
   // Default RTT in RemoteRateControl is 200 ms ; 50 ms is more realistic.
   estimator_->OnRttUpdate(50, 50);
+  estimator_->SetMinBitrate(kRemoteBitrateEstimatorMinBitrateBps);
 }
 
 RembReceiver::~RembReceiver() {
@@ -130,10 +128,8 @@ FeedbackPacket* RembReceiver::GetFeedback(int64_t now_ms) {
   return feedback;
 }
 
-void RembReceiver::OnReceiveBitrateChanged(
-    const std::vector<unsigned int>& ssrcs,
-    unsigned int bitrate) {
-}
+void RembReceiver::OnReceiveBitrateChanged(const std::vector<uint32_t>& ssrcs,
+                                           uint32_t bitrate) {}
 
 RTCPReportBlock RembReceiver::BuildReportBlock(
     StreamStatistician* statistician) {
@@ -150,8 +146,8 @@ RTCPReportBlock RembReceiver::BuildReportBlock(
 
 bool RembReceiver::LatestEstimate(uint32_t* estimate_bps) {
   if (latest_estimate_bps_ < 0) {
-    std::vector<unsigned int> ssrcs;
-    unsigned int bps = 0;
+    std::vector<uint32_t> ssrcs;
+    uint32_t bps = 0;
     if (!estimator_->LatestEstimate(&ssrcs, &bps)) {
       return false;
     }

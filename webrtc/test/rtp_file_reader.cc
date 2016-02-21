@@ -203,7 +203,7 @@ class RtpDumpReader : public RtpFileReaderImpl {
  private:
   FILE* file_;
 
-  DISALLOW_COPY_AND_ASSIGN(RtpDumpReader);
+  RTC_DISALLOW_COPY_AND_ASSIGN(RtpDumpReader);
 };
 
 enum {
@@ -458,7 +458,7 @@ class PcapReader : public RtpFileReaderImpl {
       rtp_parser.ParseRtcp(&marker.rtp_header);
       packets_.push_back(marker);
     } else {
-      if (!rtp_parser.Parse(marker.rtp_header, NULL)) {
+      if (!rtp_parser.Parse(&marker.rtp_header, nullptr)) {
         DEBUG_LOG("Not recognized as RTP/RTCP");
         return kResultSkip;
       }
@@ -640,7 +640,7 @@ class PcapReader : public RtpFileReaderImpl {
   std::vector<RtpPacketMarker> packets_;
   PacketIterator next_packet_it_;
 
-  DISALLOW_COPY_AND_ASSIGN(PcapReader);
+  RTC_DISALLOW_COPY_AND_ASSIGN(PcapReader);
 };
 
 RtpFileReader* RtpFileReader::Create(FileFormat format,

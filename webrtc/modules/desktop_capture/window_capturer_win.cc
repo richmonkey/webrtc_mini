@@ -13,10 +13,11 @@
 #include <assert.h>
 
 #include "webrtc/base/scoped_ptr.h"
+#include "webrtc/base/checks.h"
 #include "webrtc/base/win32.h"
 #include "webrtc/modules/desktop_capture/desktop_frame_win.h"
 #include "webrtc/modules/desktop_capture/win/window_capture_utils.h"
-#include "webrtc/system_wrappers/interface/logging.h"
+#include "webrtc/system_wrappers/include/logging.h"
 
 namespace webrtc {
 
@@ -39,12 +40,25 @@ BOOL CALLBACK WindowsEnumerationHandler(HWND hwnd, LPARAM param) {
   // Skip the Program Manager window and the Start button.
   const size_t kClassLength = 256;
   WCHAR class_name[kClassLength];
-  GetClassName(hwnd, class_name, kClassLength);
+  const int class_name_length = GetClassName(hwnd, class_name, kClassLength);
+  RTC_DCHECK(class_name_length)
+      << "Error retrieving the application's class name";
+
   // Skip Program Manager window and the Start button. This is the same logic
   // that's used in Win32WindowPicker in libjingle. Consider filtering other
   // windows as well (e.g. toolbars).
   if (wcscmp(class_name, L"Progman") == 0 || wcscmp(class_name, L"Button") == 0)
     return TRUE;
+
+  // Windows 8 introduced a "Modern App" identified by their class name being
+  // either ApplicationFrameWindow or windows.UI.Core.coreWindow. The
+  // associated windows cannot be captured, so we skip them.
+  // http://crbug.com/526883.
+  if (rtc::IsWindows8OrLater() &&
+      (wcscmp(class_name, L"ApplicationFrameWindow") == 0 ||
+       wcscmp(class_name, L"Windows.UI.Core.CoreWindow") == 0)) {
+    return TRUE;
+  }
 
   WindowCapturer::Window window;
   window.id = reinterpret_cast<WindowCapturer::WindowId>(hwnd);
@@ -89,7 +103,7 @@ class WindowCapturerWin : public WindowCapturer {
 
   AeroChecker aero_checker_;
 
-  DISALLOW_COPY_AND_ASSIGN(WindowCapturerWin);
+  RTC_DISALLOW_COPY_AND_ASSIGN(WindowCapturerWin);
 };
 
 WindowCapturerWin::WindowCapturerWin()
@@ -142,15 +156,16 @@ void WindowCapturerWin::Capture(const DesktopRegion& region) {
     return;
   }
 
-  // Stop capturing if the window has been closed or hidden.
-  if (!IsWindow(window_) || !IsWindowVisible(window_)) {
+  // Stop capturing if the window has been closed.
+  if (!IsWindow(window_)) {
     callback_->OnCaptureCompleted(NULL);
     return;
   }
 
-  // Return a 1x1 black frame if the window is minimized, to match the behavior
-  // on Mac.
-  if (IsIconic(window_)) {
+  // Return a 1x1 black frame if the window is minimized or invisible, to match
+  // behavior on mace. Window can be temporarily invisible during the
+  // transition of full screen mode on/off.
+  if (IsIconic(window_) || !IsWindowVisible(window_)) {
     BasicDesktopFrame* frame = new BasicDesktopFrame(DesktopSize(1, 1));
     memset(frame->data(), 0, frame->stride() * frame->size().height());
 

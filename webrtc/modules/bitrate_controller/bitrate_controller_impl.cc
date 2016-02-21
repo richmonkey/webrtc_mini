@@ -12,9 +12,10 @@
 #include "webrtc/modules/bitrate_controller/bitrate_controller_impl.h"
 
 #include <algorithm>
+#include <map>
 #include <utility>
 
-#include "webrtc/modules/rtp_rtcp/interface/rtp_rtcp_defines.h"
+#include "webrtc/modules/rtp_rtcp/include/rtp_rtcp_defines.h"
 
 namespace webrtc {
 
@@ -129,10 +130,25 @@ void BitrateControllerImpl::SetReservedBitrate(uint32_t reserved_bitrate_bps) {
   MaybeTriggerOnNetworkChanged();
 }
 
+void BitrateControllerImpl::SetEventLog(RtcEventLog* event_log) {
+  rtc::CritScope cs(&critsect_);
+  bandwidth_estimation_.SetEventLog(event_log);
+}
+
 void BitrateControllerImpl::OnReceivedEstimatedBitrate(uint32_t bitrate) {
   {
     rtc::CritScope cs(&critsect_);
-    bandwidth_estimation_.UpdateReceiverEstimate(bitrate);
+    bandwidth_estimation_.UpdateReceiverEstimate(clock_->TimeInMilliseconds(),
+                                                 bitrate);
+  }
+  MaybeTriggerOnNetworkChanged();
+}
+
+void BitrateControllerImpl::UpdateDelayBasedEstimate(uint32_t bitrate_bps) {
+  {
+    rtc::CritScope cs(&critsect_);
+    bandwidth_estimation_.UpdateDelayBasedEstimate(clock_->TimeInMilliseconds(),
+                                                   bitrate_bps);
   }
   MaybeTriggerOnNetworkChanged();
 }

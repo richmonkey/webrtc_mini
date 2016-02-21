@@ -31,10 +31,14 @@
 
 @synthesize videoCallView = _videoCallView;
 
-- (instancetype)initForRoom:(NSString *)room {
+- (instancetype)initForRoom:(NSString *)room
+                 isLoopback:(BOOL)isLoopback
+                isAudioOnly:(BOOL)isAudioOnly {
   if (self = [super init]) {
     _client = [[ARDAppClient alloc] initWithDelegate:self];
-    [_client connectToRoomWithId:room options:nil];
+    [_client connectToRoomWithId:room
+                      isLoopback:isLoopback
+                     isAudioOnly:isAudioOnly];
   }
   return self;
 }
@@ -124,18 +128,21 @@
   if (_localVideoTrack == localVideoTrack) {
     return;
   }
-  [_localVideoTrack removeRenderer:_videoCallView.localVideoView];
   _localVideoTrack = nil;
-  [_videoCallView.localVideoView renderFrame:nil];
   _localVideoTrack = localVideoTrack;
-  [_localVideoTrack addRenderer:_videoCallView.localVideoView];
+  RTCAVFoundationVideoSource *source = nil;
+  if ([localVideoTrack.source
+          isKindOfClass:[RTCAVFoundationVideoSource class]]) {
+    source = (RTCAVFoundationVideoSource*)localVideoTrack.source;
+  }
+  _videoCallView.localVideoView.captureSession = source.captureSession;
 }
 
 - (void)setRemoteVideoTrack:(RTCVideoTrack *)remoteVideoTrack {
   if (_remoteVideoTrack == remoteVideoTrack) {
     return;
   }
-  [_remoteVideoTrack removeRenderer:_videoCallView.localVideoView];
+  [_remoteVideoTrack removeRenderer:_videoCallView.remoteVideoView];
   _remoteVideoTrack = nil;
   [_videoCallView.remoteVideoView renderFrame:nil];
   _remoteVideoTrack = remoteVideoTrack;
@@ -172,6 +179,7 @@
     case RTCICEConnectionFailed:
     case RTCICEConnectionDisconnected:
     case RTCICEConnectionClosed:
+    case RTCICEConnectionMax:
       return nil;
   }
 }

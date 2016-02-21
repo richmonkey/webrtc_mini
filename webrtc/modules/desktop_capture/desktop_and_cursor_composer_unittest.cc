@@ -17,7 +17,7 @@
 #include "webrtc/modules/desktop_capture/mouse_cursor.h"
 #include "webrtc/modules/desktop_capture/shared_desktop_frame.h"
 #include "webrtc/modules/desktop_capture/window_capturer.h"
-#include "webrtc/system_wrappers/interface/logging.h"
+#include "webrtc/system_wrappers/include/logging.h"
 
 namespace webrtc {
 
@@ -168,8 +168,6 @@ class DesktopAndCursorComposerTest : public testing::Test,
   }
 
   // DesktopCapturer::Callback interface
-  SharedMemory* CreateSharedMemory(size_t size) override { return NULL; }
-
   void OnCaptureCompleted(DesktopFrame* frame) override { frame_.reset(frame); }
 
  protected:

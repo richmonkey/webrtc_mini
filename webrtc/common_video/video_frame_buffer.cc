@@ -8,21 +8,23 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
-#include "webrtc/common_video/interface/video_frame_buffer.h"
+#include "webrtc/common_video/include/video_frame_buffer.h"
 
-#include "webrtc/base/bind.h"
 #include "webrtc/base/checks.h"
+#include "webrtc/base/keep_ref_until_done.h"
 
 // Aligning pointer to 64 bytes for improved performance, e.g. use SIMD.
 static const int kBufferAlignment = 64;
 
 namespace webrtc {
+
 namespace {
 
-// Used in rtc::Bind to keep a buffer alive until destructor is called.
-static void NoLongerUsedCallback(rtc::scoped_refptr<VideoFrameBuffer> dummy) {}
+int I420DataSize(int height, int stride_y, int stride_u, int stride_v) {
+  return stride_y * height + (stride_u + stride_v) * ((height + 1) / 2);
+}
 
-}  // anonymous namespace
+}  // namespace
 
 uint8_t* VideoFrameBuffer::MutableData(PlaneType type) {
   RTC_NOTREACHED();
@@ -46,16 +48,21 @@ I420Buffer::I420Buffer(int width,
       stride_u_(stride_u),
       stride_v_(stride_v),
       data_(static_cast<uint8_t*>(AlignedMalloc(
-          stride_y * height + (stride_u + stride_v) * ((height + 1) / 2),
+          I420DataSize(height, stride_y, stride_u, stride_v),
           kBufferAlignment))) {
-  DCHECK_GT(width, 0);
-  DCHECK_GT(height, 0);
-  DCHECK_GE(stride_y, width);
-  DCHECK_GE(stride_u, (width + 1) / 2);
-  DCHECK_GE(stride_v, (width + 1) / 2);
+  RTC_DCHECK_GT(width, 0);
+  RTC_DCHECK_GT(height, 0);
+  RTC_DCHECK_GE(stride_y, width);
+  RTC_DCHECK_GE(stride_u, (width + 1) / 2);
+  RTC_DCHECK_GE(stride_v, (width + 1) / 2);
 }
 
 I420Buffer::~I420Buffer() {
+}
+
+void I420Buffer::InitializeData() {
+  memset(data_.get(), 0,
+         I420DataSize(height_, stride_y_, stride_u_, stride_v_));
 }
 
 int I420Buffer::width() const {
@@ -82,7 +89,7 @@ const uint8_t* I420Buffer::data(PlaneType type) const {
 }
 
 uint8_t* I420Buffer::MutableData(PlaneType type) {
-  DCHECK(HasOneRef());
+  RTC_DCHECK(HasOneRef());
   return const_cast<uint8_t*>(
       static_cast<const VideoFrameBuffer*>(this)->data(type));
 }
@@ -114,9 +121,9 @@ NativeHandleBuffer::NativeHandleBuffer(void* native_handle,
                                        int width,
                                        int height)
     : native_handle_(native_handle), width_(width), height_(height) {
-  DCHECK(native_handle != nullptr);
-  DCHECK_GT(width, 0);
-  DCHECK_GT(height, 0);
+  RTC_DCHECK(native_handle != nullptr);
+  RTC_DCHECK_GT(width, 0);
+  RTC_DCHECK_GT(height, 0);
 }
 
 int NativeHandleBuffer::width() const {
@@ -214,9 +221,9 @@ rtc::scoped_refptr<VideoFrameBuffer> ShallowCenterCrop(
     const rtc::scoped_refptr<VideoFrameBuffer>& buffer,
     int cropped_width,
     int cropped_height) {
-  CHECK(buffer->native_handle() == nullptr);
-  CHECK_LE(cropped_width, buffer->width());
-  CHECK_LE(cropped_height, buffer->height());
+  RTC_CHECK(buffer->native_handle() == nullptr);
+  RTC_CHECK_LE(cropped_width, buffer->width());
+  RTC_CHECK_LE(cropped_height, buffer->height());
   if (buffer->width() == cropped_width && buffer->height() == cropped_height)
     return buffer;
 
@@ -238,7 +245,7 @@ rtc::scoped_refptr<VideoFrameBuffer> ShallowCenterCrop(
       y_plane, buffer->stride(kYPlane),
       u_plane, buffer->stride(kUPlane),
       v_plane, buffer->stride(kVPlane),
-      rtc::Bind(&NoLongerUsedCallback, buffer));
+      rtc::KeepRefUntilDone(buffer));
 }
 
 }  // namespace webrtc

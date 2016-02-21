@@ -10,6 +10,7 @@
 
 #import "ARDAppDelegate.h"
 
+#import "webrtc/base/objc/RTCTracing.h"
 #import "RTCLogging.h"
 #import "RTCPeerConnectionFactory.h"
 
@@ -24,12 +25,13 @@
 - (BOOL)application:(UIApplication *)application
     didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
   [RTCPeerConnectionFactory initializeSSL];
+  RTCSetupInternalTracer();
   _window =  [[UIWindow alloc] initWithFrame:[[UIScreen mainScreen] bounds]];
   [_window makeKeyAndVisible];
   ARDMainViewController *viewController = [[ARDMainViewController alloc] init];
   _window.rootViewController = viewController;
 
-#ifndef _DEBUG
+#if defined(NDEBUG)
   // In debug builds the default level is LS_INFO and in non-debug builds it is
   // disabled. Continue to log to console in non-debug builds, but only
   // warnings and errors.
@@ -46,6 +48,7 @@
 }
 
 - (void)applicationWillTerminate:(UIApplication *)application {
+  RTCShutdownInternalTracer();
   [RTCPeerConnectionFactory deinitializeSSL];
 }
 

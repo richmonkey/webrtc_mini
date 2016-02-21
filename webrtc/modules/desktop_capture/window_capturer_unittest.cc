@@ -15,7 +15,7 @@
 #include "webrtc/modules/desktop_capture/desktop_capture_options.h"
 #include "webrtc/modules/desktop_capture/desktop_frame.h"
 #include "webrtc/modules/desktop_capture/desktop_region.h"
-#include "webrtc/system_wrappers/interface/logging.h"
+#include "webrtc/system_wrappers/include/logging.h"
 
 namespace webrtc {
 
@@ -30,8 +30,6 @@ class WindowCapturerTest : public testing::Test,
   void TearDown() override {}
 
   // DesktopCapturer::Callback interface
-  SharedMemory* CreateSharedMemory(size_t size) override { return NULL; }
-
   void OnCaptureCompleted(DesktopFrame* frame) override { frame_.reset(frame); }
 
  protected:

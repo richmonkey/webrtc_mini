@@ -14,9 +14,10 @@
 
 namespace webrtc {
 
-SendTimeHistory::SendTimeHistory(int64_t packet_age_limit)
-    : packet_age_limit_(packet_age_limit), oldest_sequence_number_(0) {
-}
+SendTimeHistory::SendTimeHistory(Clock* clock, int64_t packet_age_limit)
+    : clock_(clock),
+      packet_age_limit_(packet_age_limit),
+      oldest_sequence_number_(0) {}
 
 SendTimeHistory::~SendTimeHistory() {
 }
@@ -25,23 +26,37 @@ void SendTimeHistory::Clear() {
   history_.clear();
 }
 
-void SendTimeHistory::AddAndRemoveOldSendTimes(uint16_t sequence_number,
-                                               int64_t timestamp) {
-  EraseOld(timestamp - packet_age_limit_);
+void SendTimeHistory::AddAndRemoveOld(uint16_t sequence_number,
+                                      size_t length,
+                                      bool was_paced) {
+  EraseOld();
 
   if (history_.empty())
     oldest_sequence_number_ = sequence_number;
 
-  history_[sequence_number] = timestamp;
+  history_.insert(std::pair<uint16_t, PacketInfo>(
+      sequence_number, PacketInfo(clock_->TimeInMilliseconds(), 0, -1,
+                                  sequence_number, length, was_paced)));
 }
 
-void SendTimeHistory::EraseOld(int64_t limit) {
+bool SendTimeHistory::OnSentPacket(uint16_t sequence_number,
+                                   int64_t send_time_ms) {
+  auto it = history_.find(sequence_number);
+  if (it == history_.end())
+    return false;
+  it->second.send_time_ms = send_time_ms;
+  return true;
+}
+
+void SendTimeHistory::EraseOld() {
   while (!history_.empty()) {
     auto it = history_.find(oldest_sequence_number_);
     assert(it != history_.end());
 
-    if (it->second > limit)
+    if (clock_->TimeInMilliseconds() - it->second.creation_time_ms <=
+        packet_age_limit_) {
       return;  // Oldest packet within age limit, return.
+    }
 
     // TODO(sprang): Warn if erasing (too many) old items?
     history_.erase(it);
@@ -68,16 +83,16 @@ void SendTimeHistory::UpdateOldestSequenceNumber() {
   oldest_sequence_number_ = it->first;
 }
 
-bool SendTimeHistory::GetSendTime(uint16_t sequence_number,
-                                  int64_t* timestamp,
-                                  bool remove) {
-  auto it = history_.find(sequence_number);
+bool SendTimeHistory::GetInfo(PacketInfo* packet, bool remove) {
+  auto it = history_.find(packet->sequence_number);
   if (it == history_.end())
     return false;
-  *timestamp = it->second;
+  int64_t receive_time = packet->arrival_time_ms;
+  *packet = it->second;
+  packet->arrival_time_ms = receive_time;
   if (remove) {
     history_.erase(it);
-    if (sequence_number == oldest_sequence_number_)
+    if (packet->sequence_number == oldest_sequence_number_)
       UpdateOldestSequenceNumber();
   }
   return true;

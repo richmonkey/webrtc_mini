@@ -43,13 +43,10 @@ class ExternalDeviceInfo : public DeviceInfoImpl {
   virtual int32_t Init() { return 0; }
 };
 
-//避免重定义
-#ifndef ANDROID
 VideoCaptureModule::DeviceInfo* VideoCaptureImpl::CreateDeviceInfo(
     const int32_t id) {
   return new ExternalDeviceInfo(id);
 }
-#endif
 
 }  // namespace videocapturemodule
 

@@ -18,11 +18,12 @@
 #include "webrtc/base/safe_conversions.h"
 #include "webrtc/modules/audio_coding/neteq/decision_logic.h"
 #include "webrtc/modules/audio_coding/neteq/delay_manager.h"
-#include "webrtc/system_wrappers/interface/metrics.h"
+#include "webrtc/system_wrappers/include/metrics.h"
 
 namespace webrtc {
 
-// Allocating the static const so that it can be passed by reference to DCHECK.
+// Allocating the static const so that it can be passed by reference to
+// RTC_DCHECK.
 const size_t StatisticsCalculator::kLenWaitingTimes;
 
 StatisticsCalculator::PeriodicUmaLogger::PeriodicUmaLogger(
@@ -45,11 +46,11 @@ void StatisticsCalculator::PeriodicUmaLogger::AdvanceClock(int step_ms) {
   LogToUma(Metric());
   Reset();
   timer_ -= report_interval_ms_;
-  DCHECK_GE(timer_, 0);
+  RTC_DCHECK_GE(timer_, 0);
 }
 
 void StatisticsCalculator::PeriodicUmaLogger::LogToUma(int value) const {
-  RTC_HISTOGRAM_COUNTS(uma_name_, value, 1, max_value_, 50);
+  RTC_HISTOGRAM_COUNTS_SPARSE(uma_name_, value, 1, max_value_, 50);
 }
 
 StatisticsCalculator::PeriodicUmaCount::PeriodicUmaCount(
@@ -94,7 +95,7 @@ void StatisticsCalculator::PeriodicUmaAverage::RegisterSample(int value) {
 }
 
 int StatisticsCalculator::PeriodicUmaAverage::Metric() const {
-  return static_cast<int>(sum_ / counter_);
+  return counter_ == 0 ? 0 : static_cast<int>(sum_ / counter_);
 }
 
 void StatisticsCalculator::PeriodicUmaAverage::Reset() {
@@ -186,15 +187,15 @@ void StatisticsCalculator::SecondaryDecodedSamples(int num_samples) {
 }
 
 void StatisticsCalculator::LogDelayedPacketOutageEvent(int outage_duration_ms) {
-  RTC_HISTOGRAM_COUNTS("WebRTC.Audio.DelayedPacketOutageEventMs",
-                       outage_duration_ms, 1 /* min */, 2000 /* max */,
-                       100 /* bucket count */);
+  RTC_HISTOGRAM_COUNTS_SPARSE("WebRTC.Audio.DelayedPacketOutageEventMs",
+                              outage_duration_ms, 1 /* min */, 2000 /* max */,
+                              100 /* bucket count */);
   delayed_packet_outage_counter_.RegisterSample();
 }
 
 void StatisticsCalculator::StoreWaitingTime(int waiting_time_ms) {
   excess_buffer_delay_.RegisterSample(waiting_time_ms);
-  DCHECK_LE(waiting_times_.size(), kLenWaitingTimes);
+  RTC_DCHECK_LE(waiting_times_.size(), kLenWaitingTimes);
   if (waiting_times_.size() == kLenWaitingTimes) {
     // Erase first value.
     waiting_times_.pop_front();

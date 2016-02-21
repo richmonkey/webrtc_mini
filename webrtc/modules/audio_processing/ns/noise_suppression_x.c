@@ -8,7 +8,7 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
-#include "webrtc/modules/audio_processing/ns/include/noise_suppression_x.h"
+#include "webrtc/modules/audio_processing/ns/noise_suppression_x.h"
 
 #include <stdlib.h>
 
@@ -43,4 +43,16 @@ void WebRtcNsx_Process(NsxHandle* nsxInst,
                       short* const* outFrame) {
   WebRtcNsx_ProcessCore((NoiseSuppressionFixedC*)nsxInst, speechFrame,
                         num_bands, outFrame);
+}
+
+const uint32_t* WebRtcNsx_noise_estimate(const NsxHandle* nsxInst) {
+  const NoiseSuppressionFixedC* self = (const NoiseSuppressionFixedC*)nsxInst;
+  if (nsxInst == NULL || self->initFlag == 0) {
+    return NULL;
+  }
+  return self->prevNoiseU32;
+}
+
+size_t WebRtcNsx_num_freq() {
+  return HALF_ANAL_BLOCKL;
 }

@@ -11,8 +11,10 @@
 #include "webrtc/modules/rtp_rtcp/source/tmmbr_help.h"
 
 #include <assert.h>
-#include <limits>
 #include <string.h>
+
+#include <limits>
+
 #include "webrtc/modules/rtp_rtcp/source/rtp_rtcp_config.h"
 
 namespace webrtc {
@@ -139,8 +141,7 @@ TMMBRSet* TMMBRHelp::BoundingSet() {
 }
 
 int32_t
-TMMBRHelp::SetTMMBRBoundingSetToSend(const TMMBRSet* boundingSetToSend,
-                                     const uint32_t maxBitrateKbit)
+TMMBRHelp::SetTMMBRBoundingSetToSend(const TMMBRSet* boundingSetToSend)
 {
     CriticalSectionScoped lock(_criticalSection);
 
@@ -156,14 +157,6 @@ TMMBRHelp::SetTMMBRBoundingSetToSend(const TMMBRSet* boundingSetToSend,
     {
         // cap at our configured max bitrate
         uint32_t bitrate = boundingSetToSend->Tmmbr(i);
-        if(maxBitrateKbit)
-        {
-            // do we have a configured max bitrate?
-            if(bitrate > maxBitrateKbit)
-            {
-                bitrate = maxBitrateKbit;
-            }
-        }
         _boundingSetToSend.SetEntry(i, bitrate,
                                     boundingSetToSend->PacketOH(i),
                                     boundingSetToSend->Ssrc(i));
