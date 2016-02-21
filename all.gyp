@@ -9,7 +9,7 @@
 {
   'variables': {
     'include_examples%': 1,
-    'include_tests%': 1,
+    'include_tests%': 0,
     'webrtc_root_additional_dependencies': [],
   },
   'includes': [
@@ -32,7 +32,7 @@
         'webrtc/webrtc.gyp:webrtc',
       ],
       'conditions': [
-        ['include_examples==1', {
+        ['OS=="android"', {
           'dependencies': [
             'webrtc/examples/android/voip_jni/voip.gyp:*',
           ],

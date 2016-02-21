@@ -1387,7 +1387,7 @@
     # '1', uses the version of clang that ships with Xcode.  If set to '0', uses
     # the version of clang that ships with the Chromium source.  This variable
     # is automatically set to '1' in Official builds.
-    'clang_xcode%': 0,
+    'clang_xcode%': 1,
 
     # These two variables can be set in GYP_DEFINES while running
     # |gclient runhooks| to let clang run a plugin in every compilation.

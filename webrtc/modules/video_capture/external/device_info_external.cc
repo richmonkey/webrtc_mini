@@ -42,12 +42,12 @@ class ExternalDeviceInfo : public DeviceInfoImpl {
       const char* deviceUniqueIdUTF8) { return 0; }
   virtual int32_t Init() { return 0; }
 };
-
+#ifndef ANDROID
 VideoCaptureModule::DeviceInfo* VideoCaptureImpl::CreateDeviceInfo(
     const int32_t id) {
   return new ExternalDeviceInfo(id);
 }
-
+#endif
 }  // namespace videocapturemodule
 
 }  // namespace webrtc

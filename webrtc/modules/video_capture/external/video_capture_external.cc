@@ -14,7 +14,7 @@
 namespace webrtc {
 
 namespace videocapturemodule {
-
+#ifndef ANDROID
 VideoCaptureModule* VideoCaptureImpl::Create(
     const int32_t id,
     const char* deviceUniqueIdUTF8) {
@@ -22,7 +22,7 @@ VideoCaptureModule* VideoCaptureImpl::Create(
       new RefCountImpl<VideoCaptureImpl>(id);
   return implementation;
 }
-
+#endif
 }  // namespace videocapturemodule
 
 }  // namespace webrtc

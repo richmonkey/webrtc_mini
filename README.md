@@ -1,11 +1,14 @@
 git remote add -f  --no-tags webrtc /tmp/webrtc_src
 git read-tree --prefix=webrtc -u webrtc/gobelieve:webrtc
-将webrtc/build/common.gypi种的'enable_protobuf%'变量改为0.
+将webrtc/build/common.gypi种的'enable_protobuf%'变量改为0, "include_tests"变量改为0, "clang_xcode"变量改为1.
 
 
 git remote add -f  --no-tags chromium /tmp/chromium_src
 git read-tree --prefix=build -u chromium/gobelieve:build
 git read-tree --prefix=tools/clang -u chromium/gobelieve:tools/clang
+git read-tree --prefix=third_party/libvpx_new -u chromium/gobelieve:third_party/libvpx_new
+git read-tree --prefix=third_party/usrsctp -u chromium/gobelieve:third_party/usrsctp
+git read-tree --prefix=third_party/boringssl -u chromium/gobelieve:third_party/boringssl
 
 
 #init android tools

@@ -158,6 +158,26 @@
                 },
               },
             }],  # ios
+            ['OS=="android"', {
+              'sources': [
+                'android/device_info_android.cc',
+                'android/device_info_android.h',
+                'android/video_capture_android.cc',
+                'android/video_capture_android.h',
+              ],
+              'conditions': [
+                ['build_json==1', {
+                  'dependencies': [
+                    '<(DEPTH)/third_party/jsoncpp/jsoncpp.gyp:jsoncpp',
+                  ],
+                }],
+                ['build_icu==1', {
+                  'dependencies': [
+                    '<(DEPTH)/third_party/icu/icu.gyp:icuuc',
+                  ],
+                }],
+              ],
+            }],  # android
           ], # conditions
         },
       ],

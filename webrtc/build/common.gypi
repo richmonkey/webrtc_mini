@@ -93,10 +93,11 @@
     'enable_data_logging%': 0,
 
     # Enables the use of protocol buffers for debug recordings.
-    'enable_protobuf%': 1,
+    'enable_protobuf%': 0,
 
     # Disable these to not build components which can be externally provided.
     'build_expat%': 1,
+    'build_icu%': 1,
     'build_json%': 1,
     'build_libjpeg%': 1,
     'build_libsrtp%': 1,
@@ -193,7 +194,7 @@
 
         'include_pulse_audio%': 1,
         'include_internal_audio_device%': 1,
-        'include_tests%': 1,
+        'include_tests%': 0,
         'restrict_webrtc_logging%': 0,
       }],
       ['OS=="ios"', {

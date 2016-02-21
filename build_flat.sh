@@ -5,7 +5,7 @@ ninja -C out_ios64/Debug-iphoneos
 ninja -C out_ios64/Release-iphoneos 
 
 
-exclude_libs=("libsocketrocket.a" "libapprtc_signaling.a" "libjingle_peerconnection_objc.a" "libapprtc_common.a" "libvideo_capture.a")
+exclude_libs=("libsocketrocket.a" "libapprtc_signaling.a" "libjingle_peerconnection_objc.a" "libapprtc_common.a" "libvideo_capture.a" "libvpx.a")
 for i in ${exclude_libs[@]}
 do
     echo "rm $i"
